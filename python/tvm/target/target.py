@@ -233,10 +233,49 @@ class Target(Object):
         target_is_dict_key : Bool
             When the type of target is dict, whether Target is the key (Otherwise the value)
         """
-        if isinstance(target, (dict, str)):
-            target = convert(target)
-        if isinstance(host, (dict, str)):
-            host = convert(host)
+        # Convert target to Array<Target>, but not yet accounting for any host.
+        raw_targets = Target.canon_multi_target(target)
+        assert raw_targets is not None
+        # Convert host to Target, if given.
+        target_host = Target.canon_target(target_host)
+        if target_host is not None:
+            warnings.warn(
+                "target_host parameter is going to be deprecated. "
+                "Please pass in tvm.target.Target(target, host=target_host) instead."
+            )
+            # Make sure the (canonical) host is captured in all the (canonical) targets.
+            raw_targets = convert([tgt.with_host(target_host) for tgt in raw_targets])
+        return raw_targets
+
+    @staticmethod
+    def canon_target_map_and_host(target_map, target_host=None):
+        """Returns target_map as a map from TVM Target's in canonical form to IRModules. The keys
+        of the input target_map can be in any form recognized by Target.canon_target.
+        Similarly, if given, target_host can be in any form recognized by
+        Target.canon_target. The final target_map keys will capture the target_host in
+        canonical form. Also returns the target_host in canonical form."""
+        if target_host is not None:
+            # warnings.warn(
+            #     "target_host parameter is going to be deprecated. "
+            #     "Please pass in tvm.target.Target(target, host=target_host) instead."
+            # )
+            target_host = Target.canon_target(target_host)
+        new_target_map = {}
+        for tgt, mod in target_map.items():
+            tgt = Target.canon_target(tgt)
+            assert tgt is not None
+            if target_host is not None:
+                tgt = tgt.with_host(target_host)
+            # In case the first target already has a host, extract it here.
+            target_host = tgt.host
+            new_target_map[tgt] = mod
+        return new_target_map, target_host
+
+    @staticmethod
+    def target_or_current(target):
+        """Returns target, or the current target in the environment if target is None"""
+        if target is None:
+            target = Target.current()
         if target is None:
             assert host is None, "Target host is not empty when target is empty."
             return target, host

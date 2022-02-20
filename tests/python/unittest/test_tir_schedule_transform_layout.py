@@ -90,6 +90,50 @@ def two_elementwise_transformed_output_buffer(
             C[vi // 16, vj // 16, vi % 16, vj % 16] = B[vi, vj] + 1.0
 
 
+@T.prim_func
+def Conv2D(var_inputs: T.handle, var_weight: T.handle, var_conv2d_nhwc: T.handle) -> None:
+    inputs = T.match_buffer(var_inputs, [1, 224, 224, 3], align=128, offset_factor=1)
+    weight = T.match_buffer(var_weight, [7, 7, 3, 64], align=128, offset_factor=1)
+    conv2d_nhwc = T.match_buffer(var_conv2d_nhwc, [1, 112, 112, 64], align=128, offset_factor=1)
+    PadInput = T.alloc_buffer([1, 230, 230, 3], elem_offset=0, align=128, offset_factor=1)
+    for i0, i1, i2, i3 in T.grid(1, 230, 230, 3):
+        with T.block("PadInput"):
+            i0_1, i1_1, i2_1, i3_1 = T.axis.remap("SSSS", [i0, i1, i2, i3])
+            PadInput[i0_1, i1_1, i2_1, i3_1] = T.if_then_else(((((i1_1 >= 3) and (i1_1 < 227)) and (i2_1 >= 3)) and (i2_1 < 227)), inputs[i0_1, (i1_1 - 3), (i2_1 - 3), i3_1], T.float32(0), dtype="float32")
+    for i0, i1, i2, i3, i4, i5, i6 in T.grid(1, 112, 112, 64, 7, 7, 3):
+        with T.block("conv2d_nhwc"):
+            n, h, w, co, rh, rw, rc = T.axis.remap("SSSSRRR", [i0, i1, i2, i3, i4, i5, i6])
+            with T.init():
+                conv2d_nhwc[n, h, w, co] = T.float32(0)
+            conv2d_nhwc[n, h, w, co] = (conv2d_nhwc[n, h, w, co] + (PadInput[n, ((h*2) + rh), ((w*2) + rw), ((T.floordiv(co, 64)*3) + rc)]*weight[rh, rw, rc, co]))
+
+
+@T.prim_func
+def Conv2D_transformed(var_inputs: T.handle, var_weight: T.handle, var_conv2d_nhwc: T.handle) -> None:
+    inputs = T.match_buffer(var_inputs, [1, 224, 224, 3], dtype="float32", offset_factor=1)
+    weight = T.match_buffer(var_weight, [7, 7, 3, 64], dtype="float32", offset_factor=1)
+    conv2d_nhwc = T.match_buffer(var_conv2d_nhwc, [1, 112, 112, 64], dtype="float32", offset_factor=1)
+    # body
+    # with T.block("root")
+    PadInput = T.alloc_buffer([1, 230, 230, 3], dtype="float32")
+    for i0, i1, i2, i3 in T.grid(1, 230, 230, 3):
+        with T.block("PadInput"):
+            i0_1, i1_1, i2_1, i3_1 = T.axis.remap("SSSS", [i0, i1, i2, i3])
+            T.reads(inputs[i0_1, i1_1 - 3, i2_1 - 3, i3_1])
+            T.writes(PadInput[i0_1, i1_1, i2_1, i3_1])
+            PadInput[i0_1, i1_1, i2_1, i3_1] = T.if_then_else(i1_1 >= 3 and i1_1 < 227 and i2_1 >= 3 and i2_1 < 227, inputs[i0_1, i1_1 - 3, i2_1 - 3, i3_1], T.float32(0), dtype="float32")
+    for i0, i1, i2, i3, i4, i5, i6 in T.grid(1, 112, 112, 64, 7, 7, 3):
+        with T.block("conv2d_nhwc"):
+            bv = T.axis.spatial(12544, i0 * 12544 + i1 * 112 + i2)
+            bv_1 = T.axis.spatial(64, i3)
+            bv_2 = T.axis.spatial(147, i4 * 21 + i5 * 3 + i6)
+            T.reads(conv2d_nhwc[0, bv // 112 % 112, bv % 112, bv_1], PadInput[0, bv // 112 % 112 * 2 + bv_2 // 21 % 7, bv % 112 * 2 + bv_2 // 3 % 7, bv_1 // 64 * 3 + bv_2 % 3], weight[bv_2 // 21 % 7, bv_2 // 3 % 7, bv_2 % 3, bv_1])
+            T.writes(conv2d_nhwc[0, bv // 112 % 112, bv % 112, bv_1])
+            with T.init():
+                conv2d_nhwc[0, bv // 112 % 112, bv % 112, bv_1] = T.float32(0)
+            conv2d_nhwc[0, bv // 112 % 112, bv % 112, bv_1] = conv2d_nhwc[0, bv // 112 % 112, bv % 112, bv_1] + PadInput[0, bv // 112 % 112 * 2 + bv_2 // 21 % 7, bv % 112 * 2 + bv_2 // 3 % 7, bv_1 // 64 * 3 + bv_2 % 3] * weight[bv_2 // 21 % 7, bv_2 // 3 % 7, bv_2 % 3, bv_1]
+
+
 # pylint: enable=no-member,invalid-name,unused-variable,line-too-long,redefined-outer-name,unexpected-keyword-arg,too-many-nested-blocks
 # fmt: on
 
@@ -116,6 +160,54 @@ def test_two_elementwise_transform_output_buffer():
     sch.transform_layout(block, 0, "write", packed_index_map_func)
     tvm.ir.assert_structural_equal(two_elementwise_transformed_output_buffer, sch.mod["main"])
     verify_trace_roundtrip(sch=sch, mod=two_elementwise)
+
+
+def test_simplify():
+    sch = tir.Schedule(two_elementwise, debug_mask="all")
+
+    i, j = sch.get_loops(sch.get_block("C"))
+    i, i_inner = sch.split(i, factors=[None, 16])
+    j, j_inner = sch.split(j, factors=[None, 16])
+
+    sch.reorder(
+        i,
+        j,
+        i_inner,
+        j_inner,
+    )
+
+    block_outer = sch.blockize(i_inner)
+
+    B = sch.cache_read(block_outer, 0, "global")
+    sch.transform_layout(B, 0, "write", lambda i, j: (i // 16, j // 16, i % 16, j % 16))
+
+    @T.prim_func
+    def ref(B: T.Buffer[(8, 8, 16, 16), "float32"], C: T.Buffer[(128, 128), "float32"]):
+        for i_0, j_0 in T.grid(8, 8):
+            with T.block("C_o"):
+                vi_o, vj_o = T.axis.remap("SS", [i_0, j_0])
+                T.reads(B[vi_o, vj_o, 0:16, 0:16])
+                T.writes(C[vi_o * 16 : vi_o * 16 + 16, vj_o * 16 : vj_o * 16 + 16])
+                for i_1, j_1 in T.grid(16, 16):
+                    with T.block("C"):
+                        vi, vj = T.axis.remap("SS", [i_1, j_1])
+                        T.reads(B[vi_o, vj_o, vi, vj])
+                        T.writes(C[vi_o * 16 + vi, vj_o * 16 + vj])
+                        C[vi_o * 16 + vi, vj_o * 16 + vj] = B[vi_o, vj_o, vi, vj] + T.float32(1)
+
+                        # Without simplification
+                        # T.reads(B[vi // 16 + vi_o, vj // 16 + vj_o, vi % 16, vj % 16])
+                        # C[...] = B[vi // 16 + vi_o, vj // 16 + vj_o, vi % 16, vj % 16] + T.float32(1)
+
+    tvm.ir.assert_structural_equal(ref.body.block.body, sch.get(sch.get_loops(block_outer)[0]))
+
+
+def test_block_rewrite_layout():
+    print(Conv2D.script())
+    sch = tir.Schedule(Conv2D, debug_mask="all")
+    block = sch.get_block("conv2d_nhwc")
+    sch.transform_block_layout(block, lambda n, h, w, co, rh, rw, rc: (n * 112 * 112 + h * 112 + w, co, rh * 7 * 3 + rw * 3 + rc))
+    print(sch.mod.script())
 
 
 if __name__ == "__main__":
