@@ -358,6 +358,103 @@ def test_to_anf_no_op():
 
     assert_structural_equal(mod, mod_post)
 
+def test_annotate_opkind_reduce():
+    @tvm.script.ir_module
+    class InputModule:
+        @T.prim_func
+        def tir_matmul(x: T.handle, y: T.handle, z: T.handle) -> None:
+            T.func_attr({"global_symbol": "tir_matmul"})
+            m = T.var("int32")
+            n = T.var("int32")
+            k = T.var("int32")
+            A = T.match_buffer(x, (m, n))
+            B = T.match_buffer(y, (n, k))
+            C = T.match_buffer(z, (m, k))
+
+            for i, j, k in T.grid(m, k, n):
+                with T.block("matmul"):
+                    vi, vj, vk = T.axis.remap("SSR", [i, j, k])
+                    with T.init():
+                        C[vi, vj] = T.float32(0)
+                    C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vk, vj]
+
+        @R.function
+        def foo(x: Tensor[(m, n), "float32"], w: Tensor[(n, k), "float32"]) -> Tensor:
+            gv0 = R.call_tir((m, k), tir_matmul, (x, w))
+            return gv0
+
+    mod = InputModule
+    new_mod =relax.transform.AnnotateOpKind()(mod)
+    assert new_mod["tir_matmul"].attrs["op_pattern"] == 3
+
+def test_annotate_opkind_ewise():
+    @tvm.script.ir_module
+    class InputModule:
+        @T.prim_func
+        def elemwise(x: T.handle, y: T.handle) -> None:
+            T.func_attr({"global_symbol": "elemwise"})
+            A = T.match_buffer(x, (16, 16))
+            B = T.match_buffer(y, (16, 16))
+
+            for i, j in T.grid(16, 16):
+                with T.block("matmul"):
+                    vi, vj = T.axis.remap("SS", [i, j])
+                    B[vi, vj] = A[vi, vj]+1.0
+
+        @R.function
+        def foo(x: Tensor[(m, n), "float32"], w: Tensor[(n, k), "float32"]) -> Tensor:
+            gv0 = R.call_tir((m, k), elemwise, (x, w))
+            return gv0
+
+    mod = InputModule
+    new_mod =relax.transform.AnnotateOpKind()(mod)
+    assert new_mod["elemwise"].attrs["op_pattern"] == 0
+
+def test_annotate_opkind_broadcast():
+    @tvm.script.ir_module
+    class InputModule:
+        @T.prim_func
+        def broadcast(x: T.handle, y: T.handle) -> None:
+            T.func_attr({"global_symbol": "elemwise"})
+            A = T.match_buffer(x, (16, 16))
+            B = T.match_buffer(y, (16, 16, 16, 16))
+
+            for i0, j0, i1, j1 in T.grid(16, 16, 16, 16):
+                with T.block("matmul"):
+                    vi0, vj0, vi1, vj1 = T.axis.remap("SSSS", [i0, j0, i1, j1])
+                    B[vi0, vj0, vi1, vj1] = A[vj0, vj1]
+
+        @R.function
+        def foo(x: Tensor[(m, n), "float32"], w: Tensor[(n, k), "float32"]) -> Tensor:
+            gv0 = R.call_tir((m, k), broadcast, (x, w))
+            return gv0
+
+    mod = InputModule
+    new_mod =relax.transform.AnnotateOpKind()(mod)
+    assert new_mod["broadcast"].attrs["op_pattern"] == 1
+
+def test_annotate_opkind_injective():
+    @tvm.script.ir_module
+    class InputModule:
+        @T.prim_func
+        def injective(x: T.handle, y: T.handle) -> None:
+            T.func_attr({"global_symbol": "elemwise"})
+            A = T.match_buffer(x, (4, 4, 4, 4))
+            B = T.match_buffer(y, (16, 16))
+
+            for i, j in T.grid(16, 16):
+                with T.block("matmul"):
+                    vi, vj = T.axis.remap("SS", [i, j])
+                    B[vi, vj] = A[vi//4, vj//4, vi%4, vj%4]
+
+        @R.function
+        def foo(x: Tensor[(m, n), "float32"], w: Tensor[(n, k), "float32"]) -> Tensor:
+            gv0 = R.call_tir((m, k), injective, (x, w))
+            return gv0
+
+    mod = InputModule
+    new_mod =relax.transform.AnnotateOpKind()(mod)
+    assert new_mod["injective"].attrs["op_pattern"] == 2
 
 if __name__ == "__main__":
     pytest.main([__file__])
