@@ -30,6 +30,7 @@
 #include <tvm/tir/function.h>
 #include <tvm/tir/op_attr_types.h>
 #include <tvm/tir/stmt.h>
+#include <tvm/relay/op_attr_types.h>
 
 #include <string>
 
@@ -219,6 +220,8 @@ TVM_DLL size_t CalculateWorkspaceBytes(const PrimFunc& func,
  *         return stmt is NullOpt.
  */
 TVM_DLL Map<Buffer, Optional<Stmt>> DetectBufferAccessLCA(const PrimFunc& func);
+
+TVM_DLL relay::OpPatternKind AnalyzeOpPatternKind(const PrimFunc& func);
 
 // Pass variants of verification analysis
 // directly throws RuntimeError when verification fails.

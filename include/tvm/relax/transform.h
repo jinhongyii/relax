@@ -127,6 +127,13 @@ TVM_DLL Pass BindParams(String name, Map<String, runtime::NDArray> params);
  */
 TVM_DLL Pass FoldConstant();
 
+/*!
+ * \brief Annotate Op Pattern Kind for TIR functions
+ *
+ * \return The Pass.
+ */
+TVM_DLL Pass AnnotateOpKind();
+
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm
