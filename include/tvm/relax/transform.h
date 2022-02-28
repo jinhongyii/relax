@@ -87,6 +87,13 @@ TVM_DLL Pass ToANF();
 TVM_DLL Pass MetaScheduleApplyHistoryBest(const tvm::meta_schedule::Database& database,
                                           Target target);
 
+/*
+ * \brief Annotate Op Pattern Kind for TIR functions
+ *
+ * \return The Pass.
+ */
+TVM_DLL Pass AnnotateOpKind();
+
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm

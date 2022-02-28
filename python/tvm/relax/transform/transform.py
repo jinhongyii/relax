@@ -118,3 +118,14 @@ def MetaScheduleApplyHistoryBest(
 
     """
     return _ffi_api.MetaScheduleApplyHistoryBest(database, target)
+
+
+def AnnotateOpKind() -> tvm.ir.transform.Pass:
+    """Annotate Op Pattern Kind for TIR functions
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+
+    """
+    return _ffi_api.AnnotateOpKind()

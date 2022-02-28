@@ -1905,5 +1905,125 @@ bool NeedsRFactorOrCrossThreadReduction(const tir::ScheduleState& self,   //
   }
 }
 
+bool CheckSameArray(const Array<PrimExpr>& arr1, const Array<PrimExpr>& arr2) {
+  if (arr1.size() != arr2.size()) {
+    return false;
+  }
+  for (int i = 0; i < static_cast<int>(arr1.size()); i++) {
+    if (!arr1[i].same_as(arr2[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+class PatternKindAnalyzer: public StmtExprVisitor {
+  void VisitStmt_(const BufferStoreNode* op) final {
+    indices_.push_back(op->indices);
+    StmtVisitor::VisitStmt_(op);
+  }
+  void VisitExpr_(const BufferLoadNode* op) final {
+    indices_.push_back(op->indices);
+    ExprVisitor::VisitExpr_(op);
+  }
+  
+  void VisitExpr_(const CallNode* op) final {
+    kind_=relay::kOpaque;
+  }
+  
+  void VisitStmt_(const BlockNode* op)final {
+    if (op->name_hint == "root") {
+      StmtVisitor::VisitStmt(op->body);
+      return;
+    }
+
+    relay::OpPatternKind kind = relay::kOpaque;
+    
+    //test whether is elemwise
+    indices_.clear();
+    StmtVisitor::VisitStmt(op->body);
+    bool same_index = true;
+    for (int i = 1; i < static_cast<int>(indices_.size()); i++) {
+      if(!CheckSameArray(indices_[0],indices_[i])) {
+        same_index = false;
+        break;
+      }
+    }
+    if (same_index) {
+      kind = relay::kElemWise;
+      kind_ = static_cast<int>(kind)>static_cast<int>(kind_)?kind:kind_;
+      return;
+    }
+    
+    if (const auto* store = op->body.as<BufferStoreNode>()) {
+      if (const auto* load = store->value.as<BufferLoadNode>()) {
+        //test whether is broadcast
+        int j = 0;
+        bool all_var_axis = true;
+        for (int i = 0; i < static_cast<int>(load->indices.size()); i++) {
+          if (load->indices[i].as<VarNode>()) {
+            for (; j < static_cast<int>(store->indices.size()) && !store->indices[j].same_as
+                                                        (load->indices[i]); j++);
+          } else {
+            all_var_axis = false;
+            break;
+          }
+        }
+        if (all_var_axis && j != static_cast<int>(store->indices.size())) {
+          kind = relay::kBroadcast;
+          kind_ = static_cast<int>(kind)>static_cast<int>(kind_)?kind:kind_;
+          return;
+        }
+
+        std::unordered_set<const VarNode*> vars;
+        for (int i = 0; i < static_cast<int>(store->indices.size()); i++) {
+          if (const auto* v = store->indices[i].as<VarNode>()) {
+            vars.insert(v);
+          }
+        }
+        if (vars.size() == store->indices.size()) {
+          bool use_other_var = false;
+          for (int i = 0; i < static_cast<int>(load->indices.size()); i++) {
+            if (tir::UsesVar(load->indices[i],
+                             [&vars](const VarNode* var) { return !vars.count(var); })) {
+              use_other_var = true;
+              break;
+            }
+          }
+          if (!use_other_var) {
+            kind = relay::kInjective;
+            kind_ = static_cast<int>(kind) > static_cast<int>(kind_) ? kind : kind_;
+            return;
+          }
+        }
+      }
+    }
+    //test whether is reduce
+    for (IterVar it : op->iter_vars) {
+      if (it->iter_type == kCommReduce) {
+        kind = relay::kCommReduce;
+        kind_ = static_cast<int>(kind)>static_cast<int>(kind_)?kind:kind_;
+        return;
+      }
+    }
+    
+    kind_ = static_cast<int>(kind)>static_cast<int>(kind_)?kind:kind_;
+  }
+  
+  Array<Array<PrimExpr>> indices_;
+  relay::OpPatternKind kind_ =relay::kElemWise;
+
+ public:
+  relay::OpPatternKind GetResult() {
+    return kind_;
+  }
+};
+
+relay::OpPatternKind AnalyzeOpPatternKind(const PrimFunc& func){
+  PatternKindAnalyzer analyzer;
+  analyzer(func->body);
+  return analyzer.GetResult();
+}
+
 }  // namespace tir
 }  // namespace tvm
