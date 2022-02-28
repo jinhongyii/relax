@@ -148,10 +148,6 @@ def BindParams(func_name: str, params: Dict[str, tvm.runtime.NDArray]) -> tvm.ir
 
     params : dict from str to ndarray
         The map from param name to constant tensors.
-
-    Returns
-    -------
-    ret: tvm.ir.transform.Pass
     """
     return _ffi_api.BindParams(func_name, params)
 
@@ -164,3 +160,13 @@ def FoldConstant() -> tvm.ir.transform.Pass:
     ret: tvm.ir.transform.Pass
     """
     return _ffi_api.FoldConstant()
+
+
+def AnnotateOpKind() -> tvm.ir.transform.Pass:
+    """Annotate Op Pattern Kind for TIR functions
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+    """
+    return _ffi_api.AnnotateOpKind()
