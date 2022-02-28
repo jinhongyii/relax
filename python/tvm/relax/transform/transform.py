@@ -98,3 +98,12 @@ def ResolveGlobals() -> tvm.ir.transform.Pass:
     ret: tvm.ir.transform.Pass
     """
     return _ffi_api.ResolveGlobals()
+
+def AnnotateOpKind() -> tvm.ir.transform.Pass:
+    """Annotate Op Pattern Kind for TIR functions
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+    """
+    return _ffi_api.AnnotateOpKind()

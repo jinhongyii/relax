@@ -78,6 +78,13 @@ TVM_DLL Pass CallTIRRewrite();
  */
 TVM_DLL Pass ToANF();
 
+/*!
+ * \brief Annotate Op Pattern Kind for TIR functions
+ *
+ * \return The Pass.
+ */
+TVM_DLL Pass AnnotateOpKind();
+
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm
