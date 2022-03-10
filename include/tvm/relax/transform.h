@@ -134,6 +134,14 @@ TVM_DLL Pass FoldConstant();
  */
 TVM_DLL Pass AnnotateOpKind();
 
+/*!
+ * \brief Fuse operators in an expr to a larger operator according to some rules.
+ * \param fuse_opt_level The level of fuse optimization.
+ *        -1 indicates that the level will be inferred from pass context.
+ * \return The Pass.
+ */
+TVM_DLL Pass FuseOps(int fuse_opt_level = -1);
+
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm
