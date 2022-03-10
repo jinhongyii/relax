@@ -129,3 +129,20 @@ def AnnotateOpKind() -> tvm.ir.transform.Pass:
 
     """
     return _ffi_api.AnnotateOpKind()
+
+
+def FuseOps(fuse_opt_level=-1) -> tvm.ir.transform.Pass:
+    """Fuse operators in an expr to a larger operator according to some rules.
+
+    Parameters
+    ----------
+    fuse_opt_level : int
+        The level of fuse optimization. -1 indicates that the level will be
+        inferred from pass context.
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered pass for operator fusion.
+    """
+    return _ffi_api.FuseOps(fuse_opt_level)
