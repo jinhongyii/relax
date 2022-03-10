@@ -139,9 +139,9 @@ class IndexedForwardGraphCreator : private ExprVisitor {
     cur_binding_var_ = binding->var;
     ICHECK(!binding->value->IsInstance<VarNode>());
     this->vmap_[binding->var.get()] = binding->value;
-    CreateNode(binding->value.get());
+    CreateNode(binding->var.get());
     if (!binding->var->IsInstance<DataflowVarNode>()) {
-      this->UpdateEdge(binding->value, nullptr, OpPatternKind::kOpaque);
+      this->UpdateEdge(binding->var, nullptr, OpPatternKind::kOpaque);
     }
     ExprVisitor::VisitBinding_(binding);
     cur_binding_var_ = NullOpt;
@@ -162,7 +162,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
     if (op->op == call_tir_op_) {
       const Expr& shape = op->args[0];
       GlobalVar global_var = Downcast<GlobalVar>(op->args[1]);
-      tir::PrimFunc func = Downcast<tir::PrimFunc>(orginal_mod_->Lookup(global_var));
+      tir::PrimFunc func = Downcast<tir::PrimFunc>(original_mod_->Lookup(global_var));
       const Tuple& args = Downcast<Tuple>(op->args[2]);
       int func_pattern = func->GetAttr<Integer>("op_pattern").value_or(OpPatternKind::kOpaque);
 
@@ -183,7 +183,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
   void VisitExpr_(const TupleGetItemNode* op) final {
     ICHECK(cur_binding_var_.defined());
     const Var& binding_var = cur_binding_var_.value();
-    auto it = graph_.node_map.find(op);
+    auto it = graph_.node_map.find(binding_var.get());
     ICHECK(it != graph_.node_map.end());
     IndexedForwardGraph::Node* node = it->second;
 
@@ -198,7 +198,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
 
  private:
   explicit IndexedForwardGraphCreator(support::Arena* arena, const IRModule& mod)
-      : orginal_mod_(mod), arena_(arena) {}
+      : original_mod_(mod), arena_(arena) {}
 
   // Helper functions to maintain IndexedForwardGraph
   /*!
@@ -209,11 +209,6 @@ class IndexedForwardGraphCreator : private ExprVisitor {
    * \param pattern The relation pattern between the node and its parent.
    */
   void UpdateEdge(Expr node, IndexedForwardGraph::Node* parent, OpPatternKind pattern) {
-    if (const VarNode* var = node.as<VarNode>()) {
-      auto it = vmap_.find(var);
-      ICHECK(it != vmap_.end());
-      node = it->second;
-    }
     const tvm::Object* key = node.get();
     auto it = graph_.node_map.find(key);
     ICHECK(it != graph_.node_map.end());
@@ -250,7 +245,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
 
  private:
   /*! \brief The whole IRModule */
-  const IRModule& orginal_mod_;
+  const IRModule& original_mod_;
   /*! \brief Allocator of all the internal node object */
   support::Arena* arena_;
   /*! \brief The output graph */
@@ -277,49 +272,77 @@ class FuseMutator : public ExprMutator {
     for (size_t nid = 0; nid < graph.post_dfs_order.size(); ++nid) {
       ICHECK(graph.post_dfs_order[nid]->ref != nullptr);
       fuse_mutator.gmap_[graph.post_dfs_order[nid]->ref] = groups[nid];
-      fuse_mutator.ginfo_[groups[nid]] = GroupInfo();
     }
     // The following line can be used for debug.
-    fuse_mutator.DebugDumpGroup(main_func);
+    GroupDebugDumper::Dump(main_func, fuse_mutator.gmap_);
 
     return mod;
   }
 
  private:
-  explicit FuseMutator(const IRModule& mod) : orginal_mod_(mod) {}
+  explicit FuseMutator(const IRModule& mod) : original_mod_(mod) {}
 
  private:
   // Debug function, dump the group assignment in text.
-  void DebugDumpGroup(const Expr& body) {
-    std::unordered_map<const GraphPartitioner::Group*, size_t> group_id;
-    auto get_id = [&group_id](const GraphPartitioner::Group* group) -> size_t {
-      auto it = group_id.find(group);
-      if (it == group_id.end()) {
-        return group_id[group] = group_id.size();
-      } else {
-        return it->second;
+  class GroupDebugDumper : public ExprVisitor {
+   public:
+    static void Dump(const Function& func,
+                     const std::unordered_map<const Object*, GraphPartitioner::Group*>& gmap) {
+      GroupDebugDumper dumper(gmap);
+      for (const Var& pram : func->params) {
+        // Skip function params since they are always a single group
+        dumper.skip_objects_.insert(pram.get());
       }
-    };
-
-    auto print_object = [](const ObjectRef& object) -> std::string {
-      std::ostringstream os;
-      if (const auto* var = object.as<VarNode>()) {
-        os << "Var(" << var->name_hint() << ")";
-      } else if (const auto* call = object.as<CallNode>()) {
-        ICHECK(call->op == Op::Get("relax.call_tir"));
-        os << call->args[1];
-      } else {
-        os << object;
-      }
-      return os.str();
-    };
-
-    for (const auto& kv : gmap_) {
-      const ObjectRef& object = GetRef<ObjectRef>(kv.first);
-      const GraphPartitioner::Group* group = kv.second->FindRoot();
-      LOG(INFO) << print_object(object) << ": Group #" << get_id(group);
+      dumper(func);
+      LOG(INFO) << "Group partition results:\n" << dumper.os_.str();
     }
-  }
+
+   private:
+    explicit GroupDebugDumper(
+        const std::unordered_map<const Object*, GraphPartitioner::Group*>& gmap)
+        : gmap_(gmap) {}
+
+    void TryPrintGroup(const ObjectRef& object) {
+      if (skip_objects_.count(object.get())) return;
+      auto it = gmap_.find(object.get());
+      if (it == gmap_.end()) return;
+      const GraphPartitioner::Group* group = it->second->FindRoot();
+      if (const auto* var = object.as<VarNode>()) {
+        os_ << var->name_hint();
+      } else {
+        os_ << object;
+      }
+      auto g_it = group_id_.find(group);
+      os_ << ": Group #";
+      if (g_it == group_id_.end()) {
+        os_ << (group_id_[group] = group_id_.size());
+      } else {
+        os_ << g_it->second;
+      }
+      os_ << "\n";
+
+      // Prevent showing the same node multiple times
+      skip_objects_.insert(object.get());
+    }
+
+    void VisitExpr(const Expr& expr) final {
+      TryPrintGroup(expr);
+      ExprVisitor::VisitExpr(expr);
+    }
+
+   private:
+    std::unordered_map<const GraphPartitioner::Group*, size_t> group_id_;
+    std::ostringstream os_;
+    const std::unordered_map<const Object*, GraphPartitioner::Group*>& gmap_;
+    std::unordered_set<const Object*> skip_objects_;
+  };
+
+  /*! \brief Internal arena. */
+  support::Arena arena_;
+  /*! \brief The group assignment map. */
+  std::unordered_map<const Object*, GraphPartitioner::Group*> gmap_;
+  /*! \brief The IRModule. */
+  IRModule original_mod_;
 };
 
 namespace transform {
