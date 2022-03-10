@@ -87,12 +87,20 @@ TVM_DLL Pass ToANF();
 TVM_DLL Pass MetaScheduleApplyHistoryBest(const tvm::meta_schedule::Database& database,
                                           Target target);
 
-/*
+/*!
  * \brief Annotate Op Pattern Kind for TIR functions
  *
  * \return The Pass.
  */
 TVM_DLL Pass AnnotateOpKind();
+
+/*!
+ * \brief Fuse operators in an expr to a larger operator according to some rules.
+ * \param fuse_opt_level The level of fuse optimization.
+ *        -1 indicates that the level will be inferred from pass context.
+ * \return The Pass.
+ */
+TVM_DLL Pass FuseOps(int fuse_opt_level = -1);
 
 }  // namespace transform
 }  // namespace relax
