@@ -111,7 +111,6 @@ class IndexedForwardGraphCreator : private ExprVisitor {
 
   void VisitExpr_(const FunctionNode* op) final {
     for (const Var& param : op->params) {
-      this->vmap_[param.get()] = param;
       CreateNode(param.get());
       this->UpdateEdge(param, nullptr, OpPatternKind::kOpaque);
     }
@@ -133,12 +132,15 @@ class IndexedForwardGraphCreator : private ExprVisitor {
     return;
   }
 
+  void VisitBinding_(const MatchShapeNode* binding) final {
+    auto node = CreateNode(binding->var.get());
+    this->UpdateEdge(binding->var, node, OpPatternKind::kInjective);
+  }
+
   void VisitBinding_(const VarBindingNode* binding) final {
     // Don't allow recursive var binding.
     ICHECK(!cur_binding_var_.defined());
     cur_binding_var_ = binding->var;
-    ICHECK(!binding->value->IsInstance<VarNode>());
-    this->vmap_[binding->var.get()] = binding->value;
     CreateNode(binding->var.get());
     if (!binding->var->IsInstance<DataflowVarNode>()) {
       this->UpdateEdge(binding->var, nullptr, OpPatternKind::kOpaque);
@@ -250,10 +252,6 @@ class IndexedForwardGraphCreator : private ExprVisitor {
   support::Arena* arena_;
   /*! \brief The output graph */
   IndexedForwardGraph graph_;
-  /*! \brief Attribute equal comparator */
-  StructuralEqual attr_equal_;
-  /*! \brief Var binding map */
-  std::unordered_map<const VarNode*, Expr> vmap_;
   /*! \brief current binding var */
   Optional<Var> cur_binding_var_ = NullOpt;
 };
