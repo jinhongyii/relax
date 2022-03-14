@@ -82,11 +82,16 @@ TVM_REGISTER_PASS_CONFIG_OPTION("relax.FuseOps.max_depth", Integer);
 // Creator of post dominator tree of the dataflow
 class IndexedForwardGraphCreator : private ExprVisitor {
  public:
-  static IndexedForwardGraph Create(support::Arena* arena, const IRModule& mod) {
+  static IndexedForwardGraph Create(const IRModule& mod, support::Arena* arena) {
     GlobalVar main_global_var = mod->GetGlobalVar("main");
     Function body = Downcast<Function>(mod->Lookup(main_global_var));
     IndexedForwardGraphCreator creator(arena, mod);
-    creator.VisitExpr(body);
+    for (const auto& kv : mod->functions) {
+      const Expr& func = kv.second;
+      if (func->IsInstance<FunctionNode>()) {
+        creator.VisitExpr(body);
+      }
+    }
     // creator.graph_.DebugDump();
     return creator.graph_;
   }
@@ -164,7 +169,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
     if (op->op == call_tir_op_) {
       const Expr& shape = op->args[0];
       GlobalVar global_var = Downcast<GlobalVar>(op->args[1]);
-      tir::PrimFunc func = Downcast<tir::PrimFunc>(original_mod_->Lookup(global_var));
+      tir::PrimFunc func = Downcast<tir::PrimFunc>(mod_->Lookup(global_var));
       const Tuple& args = Downcast<Tuple>(op->args[2]);
       int func_pattern = func->GetAttr<Integer>("op_pattern").value_or(OpPatternKind::kOpaque);
 
@@ -200,7 +205,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
 
  private:
   explicit IndexedForwardGraphCreator(support::Arena* arena, const IRModule& mod)
-      : original_mod_(mod), arena_(arena) {}
+      : mod_(mod), arena_(arena) {}
 
   // Helper functions to maintain IndexedForwardGraph
   /*!
@@ -247,7 +252,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
 
  private:
   /*! \brief The whole IRModule */
-  const IRModule& original_mod_;
+  const IRModule& mod_;
   /*! \brief Allocator of all the internal node object */
   support::Arena* arena_;
   /*! \brief The output graph */
@@ -261,37 +266,156 @@ class FuseMutator : public ExprMutator {
   // Run the transform
   static IRModule Transform(const IRModule& mod, int fuse_opt_level, size_t max_fuse_depth) {
     // setup the group map.
-    FuseMutator fuse_mutator(mod);
-    GlobalVar main_global_var = mod->GetGlobalVar("main");
-    Function main_func = Downcast<Function>(mod->Lookup(main_global_var));
-    auto graph = IndexedForwardGraphCreator::Create(&fuse_mutator.arena_, mod);
+    FuseMutator mutator(mod);
+    auto graph = IndexedForwardGraphCreator::Create(mod, &mutator.arena_);
     auto groups =
-        GraphPartitioner(&fuse_mutator.arena_, fuse_opt_level, max_fuse_depth).Partition(graph);
+        GraphPartitioner(&mutator.arena_, fuse_opt_level, max_fuse_depth).Partition(graph);
     for (size_t nid = 0; nid < graph.post_dfs_order.size(); ++nid) {
       ICHECK(graph.post_dfs_order[nid]->ref != nullptr);
-      fuse_mutator.gmap_[graph.post_dfs_order[nid]->ref] = groups[nid];
+      mutator.gmap_[graph.post_dfs_order[nid]->ref] = groups[nid];
     }
-    // The following line can be used for debug.
-    GroupDebugDumper::Dump(main_func, fuse_mutator.gmap_);
 
-    return mod;
+    // The following line can be used for debug.
+    // GroupDebugDumper::Dump(mod, mutator.gmap_);
+
+    for (const auto& kv : mod->functions) {
+      Expr func = kv.second;
+      const GlobalVar& global_var = kv.first;
+      if (func->IsInstance<FunctionNode>()) {
+        func = mutator.VisitExpr(func);
+      }
+      mutator.builder_->AddFuncToContext(Downcast<BaseFunc>(func), global_var->name_hint);
+    }
+
+    return mutator.builder_->GetContextIRModule();
   }
 
  private:
-  explicit FuseMutator(const IRModule& mod) : original_mod_(mod) {}
+  explicit FuseMutator(const IRModule& mod) : mod_(mod) {}
+
+  BindingBlock VisitBindingBlock_(const BindingBlockNode* block) final {
+    // Skip Binding Block since it's imprue (with side effect or control flow)
+    return GetRef<BindingBlock>(block);
+  }
+
+  void VisitBinding_(const VarBindingNode* binding) final {
+    const Var& var = binding->var;
+    LOG(INFO) << var->name_hint();
+    LOG(INFO) << var->checked_type_;
+    LOG(INFO) << var->type_annotation;
+    LOG(INFO) << var->shape_;
+    ICHECK(gmap_.count(var.get()));
+    cur_group_ = gmap_.at(var.get())->FindRoot();
+
+    auto it = ginfo_.find(cur_group_);
+    if (it == ginfo_.end()) {
+      // This is a new group
+      ginfo_[cur_group_] = GroupInfo();
+      if (cur_group_->root_ref == var.get()) {
+        // Don't create new function if there is only one binding in the new group
+        return ExprMutator::VisitBinding_(binding);
+      } else {
+        builder_->BeginDataflowBlock();
+        ExprMutator::VisitBinding_(binding);
+      }
+    } else {
+      Expr new_value = this->VisitExpr(binding->value);
+      LOG(INFO) << binding->value->checked_type_;
+      LOG(INFO) << new_value->checked_type_;
+      Var new_var = this->VisitVarDef(binding->var);
+      LOG(INFO) << new_var->checked_type_;
+      LOG(INFO) << binding->var->checked_type_;
+      builder_->EmitOutput(new_value);
+      if (cur_group_->root_ref == var.get()) {
+        builder_->Emit(MakeNewFunction());
+      }
+    }
+  }
+
+  Expr VisitExpr_(const CallNode* call) final {
+    static const Op& call_tir_op_ = Op::Get("relax.call_tir");
+    Expr expr = ExprMutator::VisitExpr_(call);
+    call = expr.as<CallNode>();
+    ICHECK(call != nullptr);
+
+    if (call->op.as<OpNode>()) {
+      if (call->op == call_tir_op_) {
+        Tuple call_tir_args = Downcast<Tuple>(call->args[2]);
+        Array<Expr> new_tir_args = GetNewArguments(call_tir_args->fields);
+        Array<Expr> args = {call->args[0], call->args[1], Tuple(new_tir_args)};
+        return Call(call->op, call->args, {}, {});
+      } else {
+        LOG(FATAL) << "Unsupported OpNode: " << call->op;
+        return Expr();
+      }
+    } else {
+      return GetRef<Expr>(call);
+    }
+  }
+
+  Array<Expr> GetNewArguments(const tvm::Array<Expr>& args) {
+    Array<Expr> new_args;
+    for (const Expr& arg : args) {
+      LOG(INFO) << arg.as<VarNode>()->name_hint();
+      ICHECK(gmap_.count(arg.get()));
+      auto* arg_group = gmap_.at(arg.get())->FindRoot();
+      Expr new_arg = VisitExpr(arg);
+      if (cur_group_ != arg_group) {
+        Var param = ginfo_[cur_group_].GetOrAllocParam(new_arg);
+        new_args.push_back(param);
+      } else {
+        new_args.push_back(new_arg);
+      }
+    }
+    return new_args;
+  }
+
+  Expr MakeNewFunction() {
+    const GroupInfo& ginfo = ginfo_[cur_group_];
+    DataflowBlock block = Downcast<DataflowBlock>(builder_->EndBlock());
+    Optional<Expr> output_body;
+
+    for (const relax::Binding& binding : block->bindings) {
+      Var var;
+      if (const relax::VarBindingNode* var_binding = binding.as<relax::VarBindingNode>()) {
+        var = var_binding->var;
+      } else if (const relax::MatchShapeNode* shape_binding = binding.as<relax::MatchShapeNode>()) {
+        var = shape_binding->var;
+      }
+      LOG(INFO) << var;
+      if (var.defined() && !var.as<relax::DataflowVarNode>()) {
+        ICHECK(!output_body) << "Only one output is allowed";
+        output_body = var;
+      }
+    }
+    LOG(INFO) << block->bindings.size();
+    ICHECK(output_body) << "There should be at least one output.";
+    const Expr& body = output_body.value();
+    LOG(INFO) << Downcast<Var>(body)->name_hint();
+    LOG(INFO) << Downcast<Var>(body)->type_annotation;
+    LOG(INFO) << body->checked_type_;
+    auto func = Function(NullOpt, ginfo.params, SeqExpr({block}, body), body->checked_type());
+    GlobalVar gv = builder_->AddFuncToContext(func, ginfo.name_hint);
+    return Call(gv, ginfo.arguments);
+  }
 
  private:
   // Debug function, dump the group assignment in text.
   class GroupDebugDumper : public ExprVisitor {
    public:
-    static void Dump(const Function& func,
+    static void Dump(const IRModule& mod,
                      const std::unordered_map<const Object*, GraphPartitioner::Group*>& gmap) {
       GroupDebugDumper dumper(gmap);
-      for (const Var& pram : func->params) {
-        // Skip function params since they are always a single group
-        dumper.skip_objects_.insert(pram.get());
+      for (const auto& kv : mod->functions) {
+        if (const auto* func = kv.second.as<FunctionNode>()) {
+          for (const Var& pram : func->params) {
+            // Skip function params since they are always a single group
+            dumper.skip_objects_.insert(pram.get());
+          }
+          dumper(GetRef<Expr>(func));
+        }
       }
-      dumper(func);
+
       LOG(INFO) << "Group partition results:\n" << dumper.os_.str();
     }
 
@@ -335,12 +459,40 @@ class FuseMutator : public ExprMutator {
     std::unordered_set<const Object*> skip_objects_;
   };
 
+ private:
+  struct GroupInfo {
+    // The parameters of the function.
+    Array<Var> params;
+    // The arguments to call the functions.
+    Array<Expr> arguments;
+    // The name hint for the group
+    String name_hint;
+    Var GetOrAllocParam(const Expr& arg) {
+      // run linear scan as most fused groups contain only a few inputs.
+      for (size_t i = 0; i < arguments.size(); ++i) {
+        if (arg.same_as(arguments[i])) return params[i];
+      }
+      // create a new parameter.
+      if (const auto* arg_var = arg.as<VarNode>()) {
+        params.push_back(Var(arg_var->name_hint(), arg_var->shape(), arg_var->type_annotation));
+      } else {
+        // TODO(siyuan): need enhance it.
+        LOG(FATAL) << "ValueError: call args must be a var for now.";
+      }
+      arguments.push_back(arg);
+      return params.back();
+    }
+  };
   /*! \brief Internal arena. */
   support::Arena arena_;
   /*! \brief The group assignment map. */
   std::unordered_map<const Object*, GraphPartitioner::Group*> gmap_;
+  /*! \brief Internal group information map. */
+  std::unordered_map<GraphPartitioner::Group*, GroupInfo> ginfo_;
   /*! \brief The IRModule. */
-  IRModule original_mod_;
+  IRModule mod_;
+  /*! \brief The current group. */
+  GraphPartitioner::Group* cur_group_;
 };
 
 namespace transform {
