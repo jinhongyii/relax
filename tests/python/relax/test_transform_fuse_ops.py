@@ -14,14 +14,13 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from __future__ import annotations  # must import to defer parsing of annotations
-
-from tvm import relax
+from __future__ import annotations # must import to defer parsing of annotations
 
 import tvm.script
+from tvm import relax
 from tvm.script import tir as T, relax as R
-
-from tvm.relax.testing import resnet
+from tvm.relay import testing
+from tvm.relax.testing import relay_translator
 
 
 def test_fuse_simple():
@@ -64,9 +63,12 @@ def test_fuse_simple():
 
 
 def test_fuse_resnet():
-    mod = resnet.ResNet50
+    relay_mod, _ = testing.resnet.get_workload(num_layers=50, batch_size=1, dtype="float32")
+    mod = relay_translator.from_relay(relay_mod["main"])
+
     mod = relax.transform.AnnotateOpKind()(mod)
     mod = relax.transform.FuseOps()(mod)
+    print(R.parser.astext(mod["main"]))
 
 
 if __name__ == "__main__":

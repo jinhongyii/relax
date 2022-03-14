@@ -228,7 +228,11 @@ def from_relay(func: relay.Function) -> IRModule:
             else:
                 raise RuntimeError("tuple is not in var_map")
         elif isinstance(node, relay.Function):
-            relax.BlockBuilder.current().emit_func_output(output_var, params)
+            cur_bb = relax.BlockBuilder.current()
+            gv = cur_bb.emit_output(output_var)
+            df_block = cur_bb._end_block()
+            cur_bb._blocks.append(df_block)
+            cur_bb.emit_func_output(gv, params)
         elif isinstance(node, tvm.ir.Op):
             pass
         else:
@@ -236,6 +240,7 @@ def from_relay(func: relay.Function) -> IRModule:
 
     bb = relax.BlockBuilder()
     with bb.function("main"):
+        bb._begin_dataflow_block()
         relay.analysis.post_order_visit(func, visit_func)
 
     return bb.get()
