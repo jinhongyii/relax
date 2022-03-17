@@ -124,14 +124,6 @@ class IndexedForwardGraphCreator : private ExprVisitor {
 
   void VisitExpr_(const VarNode* op) final { this->AddNode(op); }
 
-  void VisitExpr_(const SeqExprNode* op) {
-    for (BindingBlock block : op->blocks) {
-      this->VisitBindingBlock(block);
-    }
-    // Don't need to visit return value
-    // this->VisitExpr(op->body);
-  }
-
   void VisitBindingBlock_(const BindingBlockNode* block) final {
     // Skip Binding Block since it's imprue (with side effect or control flow)
     return;
@@ -200,7 +192,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
   }
 
   void VisitExpr_(const IfNode* op) final {
-    LOG(INFO) << "Dataflow block expects no Control flow inside.";
+    LOG(FATAL) << "Dataflow block expects no Control flow inside.";
   }
 
  private:
@@ -300,77 +292,87 @@ class FuseMutator : public ExprMutator {
 
   void VisitBinding_(const VarBindingNode* binding) final {
     const Var& var = binding->var;
-    LOG(INFO) << var->name_hint();
-    LOG(INFO) << var->checked_type_;
-    LOG(INFO) << var->type_annotation;
-    LOG(INFO) << var->shape_;
     ICHECK(gmap_.count(var.get()));
     cur_group_ = gmap_.at(var.get())->FindRoot();
 
     auto it = ginfo_.find(cur_group_);
     if (it == ginfo_.end()) {
       // This is a new group
-      ginfo_[cur_group_] = GroupInfo();
       if (cur_group_->root_ref == var.get()) {
         // Don't create new function if there is only one binding in the new group
-        return ExprMutator::VisitBinding_(binding);
+        ExprMutator::VisitBinding_(binding);
       } else {
+        ginfo_[cur_group_] = GroupInfo();
         builder_->BeginDataflowBlock();
         ExprMutator::VisitBinding_(binding);
       }
     } else {
       Expr new_value = this->VisitExpr(binding->value);
-      LOG(INFO) << binding->value->checked_type_;
-      LOG(INFO) << new_value->checked_type_;
-      Var new_var = this->VisitVarDef(binding->var);
-      LOG(INFO) << new_var->checked_type_;
-      LOG(INFO) << binding->var->checked_type_;
       builder_->EmitOutput(new_value);
       if (cur_group_->root_ref == var.get()) {
-        builder_->Emit(MakeNewFunction());
+        Var new_var = builder_->Emit(MakeNewFunction(var->checked_type(), var->shape_));
+        this->var_remap_[var->vid] = new_var;
       }
     }
   }
 
   Expr VisitExpr_(const CallNode* call) final {
+    if (ginfo_.find(cur_group_) == ginfo_.end()) {
+      // return the value if no need to fuse
+      return ExprMutator::VisitExpr_(call);
+    }
     static const Op& call_tir_op_ = Op::Get("relax.call_tir");
-    Expr expr = ExprMutator::VisitExpr_(call);
-    call = expr.as<CallNode>();
-    ICHECK(call != nullptr);
 
     if (call->op.as<OpNode>()) {
       if (call->op == call_tir_op_) {
-        Tuple call_tir_args = Downcast<Tuple>(call->args[2]);
-        Array<Expr> new_tir_args = GetNewArguments(call_tir_args->fields);
-        Array<Expr> args = {call->args[0], call->args[1], Tuple(new_tir_args)};
-        return Call(call->op, call->args, {}, {});
+        return GetNewCallTIR(call);
       } else {
         LOG(FATAL) << "Unsupported OpNode: " << call->op;
         return Expr();
       }
     } else {
-      return GetRef<Expr>(call);
+      return ExprMutator::VisitExpr_(call);
     }
+  }
+
+  Expr VisitExpr_(const TupleGetItemNode* op) final {
+    if (ginfo_.find(cur_group_) != ginfo_.end()) {
+      auto t = ginfo_[cur_group_].GetOrAllocParam(op->tuple);
+      return TupleGetItem(t, op->index, op->span);
+    }
+    return ExprMutator::VisitExpr_(op);
+  }
+
+  Call GetNewCallTIR(const CallNode* call) {
+    Tuple call_tir_args = Downcast<Tuple>(call->args[2]);
+    // Update fused func name
+    GlobalVar gv = Downcast<GlobalVar>(call->args[1]);
+    ginfo_[cur_group_].name_hint = ginfo_[cur_group_].name_hint + "_" + gv->name_hint;
+    // Update fused func arguments
+    Array<Expr> new_tir_args = GetNewArguments(call_tir_args->fields);
+    Array<Expr> args = {call->args[0], call->args[1], Tuple(new_tir_args)};
+    return Call(call->op, args, {}, {});
   }
 
   Array<Expr> GetNewArguments(const tvm::Array<Expr>& args) {
     Array<Expr> new_args;
-    for (const Expr& arg : args) {
-      LOG(INFO) << arg.as<VarNode>()->name_hint();
+    for (Expr arg : args) {
       ICHECK(gmap_.count(arg.get()));
       auto* arg_group = gmap_.at(arg.get())->FindRoot();
-      Expr new_arg = VisitExpr(arg);
+      arg = VisitExpr(arg);
       if (cur_group_ != arg_group) {
-        Var param = ginfo_[cur_group_].GetOrAllocParam(new_arg);
+        Var param = ginfo_[cur_group_].GetOrAllocParam(arg);
         new_args.push_back(param);
       } else {
-        new_args.push_back(new_arg);
+        new_args.push_back(arg);
       }
     }
     return new_args;
   }
 
-  Expr MakeNewFunction() {
+  Expr MakeNewFunction(Type type, Optional<ObjectRef> shape) {
+    // TODO(Siyuan): type is not necessary here, since it can be inferred from output body
+    //               However, current call_tir convension will block this inference
     const GroupInfo& ginfo = ginfo_[cur_group_];
     DataflowBlock block = Downcast<DataflowBlock>(builder_->EndBlock());
     Optional<Expr> output_body;
@@ -382,19 +384,15 @@ class FuseMutator : public ExprMutator {
       } else if (const relax::MatchShapeNode* shape_binding = binding.as<relax::MatchShapeNode>()) {
         var = shape_binding->var;
       }
-      LOG(INFO) << var;
       if (var.defined() && !var.as<relax::DataflowVarNode>()) {
         ICHECK(!output_body) << "Only one output is allowed";
         output_body = var;
       }
     }
-    LOG(INFO) << block->bindings.size();
     ICHECK(output_body) << "There should be at least one output.";
     const Expr& body = output_body.value();
-    LOG(INFO) << Downcast<Var>(body)->name_hint();
-    LOG(INFO) << Downcast<Var>(body)->type_annotation;
-    LOG(INFO) << body->checked_type_;
-    auto func = Function(NullOpt, ginfo.params, SeqExpr({block}, body), body->checked_type());
+    auto func = Function(NullOpt, ginfo.params, SeqExpr({block}, body), type);
+    func->shape_ = shape;
     GlobalVar gv = builder_->AddFuncToContext(func, ginfo.name_hint);
     return Call(gv, ginfo.arguments);
   }
@@ -434,6 +432,7 @@ class FuseMutator : public ExprMutator {
       } else {
         os_ << object;
       }
+      os_ << "(" << object.get() << ")";
       auto g_it = group_id_.find(group);
       os_ << ": Group #";
       if (g_it == group_id_.end()) {
@@ -466,7 +465,8 @@ class FuseMutator : public ExprMutator {
     // The arguments to call the functions.
     Array<Expr> arguments;
     // The name hint for the group
-    String name_hint;
+    String name_hint = "fused";
+
     Var GetOrAllocParam(const Expr& arg) {
       // run linear scan as most fused groups contain only a few inputs.
       for (size_t i = 0; i < arguments.size(); ++i) {
