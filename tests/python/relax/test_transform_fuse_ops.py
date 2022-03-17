@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from __future__ import annotations # must import to defer parsing of annotations
+from __future__ import annotations  # must import to defer parsing of annotations
 
 import tvm.script
 from tvm import relax
@@ -68,7 +68,20 @@ def test_fuse_resnet():
 
     mod = relax.transform.AnnotateOpKind()(mod)
     mod = relax.transform.FuseOps()(mod)
-    print(R.parser.astext(mod["main"]))
+    print(R.parser.astext(mod))
+
+    # from tvm.relax.testing import nn
+    # import numpy as np
+    # # build the IRModule and create relax vm
+    # target = tvm.target.Target("llvm", host="llvm")
+    # ex, lib = relax.vm.build(mod, target)
+    # vm = relax.VirtualMachine(ex, tvm.cpu(), mod=lib)
+
+    # # init weights and run the model on relax vm
+    # shape = (1, 3, 224, 224)
+    # data = tvm.nd.array(np.random.rand(*shape).astype(np.float32))
+    # params = nn.init_params(mod)
+    # res = vm["main"](data, *params)
 
 
 if __name__ == "__main__":
