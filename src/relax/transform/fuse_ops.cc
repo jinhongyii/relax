@@ -159,10 +159,10 @@ class IndexedForwardGraphCreator : private ExprVisitor {
     OpPatternKind op_pattern = OpPatternKind::kOpaque;
     ICHECK(op->op->IsInstance<OpNode>());
     if (op->op == call_tir_op_) {
-      const Expr& shape = op->args[0];
-      GlobalVar global_var = Downcast<GlobalVar>(op->args[1]);
+      GlobalVar global_var = Downcast<GlobalVar>(op->args[0]);
       tir::PrimFunc func = Downcast<tir::PrimFunc>(mod_->Lookup(global_var));
-      const Tuple& args = Downcast<Tuple>(op->args[2]);
+      const Tuple& args = Downcast<Tuple>(op->args[1]);
+      const Expr& shape = op->args[2];
       int func_pattern = func->GetAttr<Integer>("op_pattern").value_or(OpPatternKind::kOpaque);
 
       // TODO(siyuan): Check the integer data is valid
@@ -344,14 +344,14 @@ class FuseMutator : public ExprMutator {
   }
 
   Call GetNewCallTIR(const CallNode* call) {
-    Tuple call_tir_args = Downcast<Tuple>(call->args[2]);
+    Tuple call_tir_args = Downcast<Tuple>(call->args[1]);
     // Update fused func name
-    GlobalVar gv = Downcast<GlobalVar>(call->args[1]);
+    GlobalVar gv = Downcast<GlobalVar>(call->args[0]);
     ginfo_[cur_group_].name_hint = ginfo_[cur_group_].name_hint + "_" + gv->name_hint;
     // Update fused func arguments
     Array<Expr> new_tir_args = GetNewArguments(call_tir_args->fields);
-    Array<Expr> args = {call->args[0], call->args[1], Tuple(new_tir_args)};
-    return Call(call->op, args, {}, {});
+    Array<Expr> args = {call->args[0], Tuple(new_tir_args), call->args[2]};
+    return Call(call->op, args, {}, call->type_args);
   }
 
   Array<Expr> GetNewArguments(const tvm::Array<Expr>& args) {
@@ -474,7 +474,7 @@ class FuseMutator : public ExprMutator {
       }
       // create a new parameter.
       if (const auto* arg_var = arg.as<VarNode>()) {
-        params.push_back(Var(arg_var->name_hint(), arg_var->shape(), arg_var->type_annotation));
+        params.push_back(Var(arg_var->name_hint(), arg_var->shape(), arg_var->checked_type_));
       } else {
         // TODO(siyuan): need enhance it.
         LOG(FATAL) << "ValueError: call args must be a var for now.";
