@@ -298,23 +298,40 @@ BindingBlock BlockBuilderNode::EndBlock() {
   return ret;
 }
 
-Optional<Expr> InferShape(const Call& call, DiagnosticContext diag_ctx) {
-  auto op_map = Op::GetAttrMap<FInferShape>("FInferShape");
-  if (call->op.as<OpNode>()) {
-    Op op = Downcast<Op>(call->op);
-    if (op_map.count(op)) {
-      return op_map[op](call, diag_ctx);
+Optional<Expr> InferShape(const Expr& expr, DiagnosticContext diag_ctx) {
+  if (const auto* call = expr.as<CallNode>()) {
+    auto op_map = Op::GetAttrMap<FInferShape>("FInferShape");
+    if (call->op.as<OpNode>()) {
+      Op op = Downcast<Op>(call->op);
+      if (op_map.count(op)) {
+        return op_map[op](GetRef<Call>(call), diag_ctx);
+      }
+    }
+  } else if (const auto* tuple_item = expr.as<TupleGetItemNode>()) {
+    const Expr& tuple = tuple_item->tuple;
+    if (tuple->shape_) {
+      Tuple shape_tuple = Downcast<Tuple>(tuple->shape_.value());
+      return shape_tuple->fields[tuple_item->index];
     }
   }
+
   return NullOpt;
 }
 
-Type InferType(const Call& call, DiagnosticContext diag_ctx) {
-  auto op_map = Op::GetAttrMap<FInferType>("FInferType");
-  if (call->op.as<OpNode>()) {
-    Op op = Downcast<Op>(call->op);
-    if (op_map.count(op)) {
-      return op_map[op](call, diag_ctx);
+Type InferType(const Expr& expr, DiagnosticContext diag_ctx) {
+  if (const auto* call = expr.as<CallNode>()) {
+    auto op_map = Op::GetAttrMap<FInferType>("FInferType");
+    if (call->op.as<OpNode>()) {
+      Op op = Downcast<Op>(call->op);
+      if (op_map.count(op)) {
+        return op_map[op](GetRef<Call>(call), diag_ctx);
+      }
+    }
+  } else if (const auto* tuple_item = expr.as<TupleGetItemNode>()) {
+    const Expr& tuple = tuple_item->tuple;
+    if (tuple->checked_type_.defined()) {
+      TupleType tuple_type = Downcast<TupleType>(tuple->checked_type());
+      return tuple_type->fields[tuple_item->index];
     }
   }
   return Type();
@@ -501,31 +518,26 @@ bool BlockBuilderNode::CanProveShapeEqual(const Expr& lhs, const Expr& rhs) {
 Expr BlockBuilderNode::Normalize(const Expr& expr) {
   // TODO(@altanh): fast path
   Expr normalized = normalizer_->VisitExpr(expr);
-  if (normalized.as<CallNode>()) {
-    // FIXME(@altanh): potentially breaks idempotency
-    Call call = Downcast<Call>(normalized);
 
-    // only do shape/type inference if the call does not have shape/type
-    if (call->shape_ && call->checked_type_.defined()) {
-      return call;
-    }
-
-    // Shape inference
-    if (!call->shape_) {
-      auto inferred_shape = InferShape(call, this->diag_ctx_);
-      if (inferred_shape) {
-        call->shape_ = this->Normalize(inferred_shape.value());
-      }
-    }
-
-    if (!call->checked_type_.defined()) {
-      // Type inference
-      auto inferred_type = InferType(call, this->diag_ctx_);
-      call->checked_type_ = inferred_type;
-    }
-
-    return call;
+  // only do shape/type inference if the call does not have shape/type
+  if (normalized->shape_ && normalized->checked_type_.defined()) {
+    return normalized;
   }
+
+  // Shape inference
+  if (!normalized->shape_) {
+    auto inferred_shape = InferShape(normalized, this->diag_ctx_);
+    if (inferred_shape) {
+      normalized->shape_ = this->Normalize(inferred_shape.value());
+    }
+  }
+
+  if (!normalized->checked_type_.defined()) {
+    // Type inference
+    auto inferred_type = InferType(normalized, this->diag_ctx_);
+    normalized->checked_type_ = inferred_type;
+  }
+
   return normalized;
 }
 
