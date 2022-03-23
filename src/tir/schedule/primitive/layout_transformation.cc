@@ -132,7 +132,7 @@ void TransformLayout(ScheduleState self, const StmtSRef& block_sref, int buffer_
       GetNthAccessBuffer(self, GetRef<Block>(block_ptr), buffer_index,
                          buffer_index_type == BufferIndexType::kRead ? false : true);
   Optional<StmtSRef> defining_site_sref;
-  bool is_alloc;
+  bool is_alloc;  
   std::tie(defining_site_sref, is_alloc) = GetBufferDefiningSite(block_sref, old_buffer);
   if (defining_site_sref.defined() && !is_alloc) {
     throw BufferIsSubregionError(self->mod, old_buffer);

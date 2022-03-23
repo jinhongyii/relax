@@ -35,7 +35,6 @@ namespace relax {
 IRModule Annotate(IRModule m) {
   Map<GlobalVar, tir::PrimFunc> func_map;
   for (const std::pair<GlobalVar, BaseFunc>& pr : m->functions) {
-    Doc func;
     if (const auto* f = pr.second.as<tir::PrimFuncNode>()) {
       relay::OpPatternKind kind = AnalyzeOpPatternKind(GetRef<tir::PrimFunc>(f));
       tir::PrimFunc annotated_func = WithAttr(GetRef<tir::PrimFunc>(f), "op_pattern", Integer(static_cast<int>

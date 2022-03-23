@@ -24,6 +24,11 @@
 #include <tvm/runtime/registry.h>
 #include <tvm/tir/function.h>
 #include <tvm/tir/op.h>
+#include <tvm/tir/stmt_functor.h>
+#include <tvm/arith/analyzer.h>
+
+
+#include "../../support/nd_int_set.h"
 
 namespace tvm {
 namespace tir {

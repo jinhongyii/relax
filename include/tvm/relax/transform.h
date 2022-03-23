@@ -135,6 +135,20 @@ TVM_DLL Pass FoldConstant();
 TVM_DLL Pass AnnotateOpKind();
 
 /*!
+ * \brief Layout Rewrite
+ *
+ * \return The Pass.
+ */
+TVM_DLL Pass LayoutRewrite();
+
+/*!
+ * \brief Fold Constant
+ *
+ * \return The Pass.
+ */
+TVM_DLL Pass FoldConstant();
+
+/*!
  * \brief Fuse operators in an expr to a larger operator according to some rules.
  * \param fuse_opt_level The level of fuse optimization.
  *        -1 indicates that the level will be inferred from pass context.

@@ -175,6 +175,26 @@ def AnnotateOpKind() -> tvm.ir.transform.Pass:
     return _ffi_api.AnnotateOpKind()
 
 
+def LayoutRewrite() -> tvm.ir.transform.Pass:
+    """Layout Rewrite
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+    """
+    return _ffi_api.LayoutRewrite()
+
+
+def FoldConstant() -> tvm.ir.transform.Pass:
+    """Fold Constant
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+    """
+    return _ffi_api.FoldConstant()
+
+
 def FuseOps(fuse_opt_level=-1) -> tvm.ir.transform.Pass:
     """Fuse operators in an expr to a larger operator according to some rules.
 
