@@ -142,6 +142,15 @@ Array<PrimExpr> IndexMapNode::MapShape(const Array<PrimExpr>& shape) const {
   return output;
 }
 
+IndexMap IndexMap::FromFunc(int ndim, runtime::TypedPackedFunc<Array<PrimExpr>(Array<Var>)> func) {
+  Array<Var> src_iters;
+  src_iters.reserve(ndim);
+  for (int i = 0; i < ndim; ++i) {
+    src_iters.push_back(Var("i" + std::to_string(i), DataType::Int(32)));
+  }
+  return IndexMap(src_iters, func(src_iters));
+}
+
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
     .set_dispatch<IndexMapNode>([](const ObjectRef& node, ReprPrinter* p) {
       auto* op = static_cast<const IndexMapNode*>(node.get());
