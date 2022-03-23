@@ -253,12 +253,12 @@ class IndexedForwardGraphCreator : private ExprVisitor {
   Optional<Var> cur_binding_var_ = NullOpt;
 };
 
-class FuseMutator : public ExprMutator {
+class RelaxFuseMutator : public ExprMutator {
  public:
   // Run the transform
   static IRModule Transform(const IRModule& mod, int fuse_opt_level, size_t max_fuse_depth) {
     // setup the group map.
-    FuseMutator mutator(mod);
+    RelaxFuseMutator mutator(mod);
     auto graph = IndexedForwardGraphCreator::Create(mod, &mutator.arena_);
     auto groups =
         GraphPartitioner(&mutator.arena_, fuse_opt_level, max_fuse_depth).Partition(graph);
@@ -275,15 +275,15 @@ class FuseMutator : public ExprMutator {
       const GlobalVar& global_var = kv.first;
       if (func->IsInstance<FunctionNode>()) {
         func = mutator.VisitExpr(func);
+        mutator.builder_->AddFuncToContext(Downcast<BaseFunc>(func), global_var->name_hint);
       }
-      mutator.builder_->AddFuncToContext(Downcast<BaseFunc>(func), global_var->name_hint);
     }
 
     return mutator.builder_->GetContextIRModule();
   }
 
  private:
-  explicit FuseMutator(const IRModule& mod) : mod_(mod) {}
+  explicit RelaxFuseMutator(const IRModule& mod) : mod_(mod) {}
 
   BindingBlock VisitBindingBlock_(const BindingBlockNode* block) final {
     // Skip Binding Block since it's imprue (with side effect or control flow)
@@ -317,15 +317,11 @@ class FuseMutator : public ExprMutator {
   }
 
   Expr VisitExpr_(const CallNode* call) final {
-    if (ginfo_.find(cur_group_) == ginfo_.end()) {
-      // return the value if no need to fuse
-      return ExprMutator::VisitExpr_(call);
-    }
     static const Op& call_tir_op_ = Op::Get("relax.call_tir");
 
     if (call->op.as<OpNode>()) {
       if (call->op == call_tir_op_) {
-        return GetNewCallTIR(call);
+        return VisitCallTIR(call);
       } else {
         LOG(FATAL) << "Unsupported OpNode: " << call->op;
         return Expr();
@@ -343,20 +339,33 @@ class FuseMutator : public ExprMutator {
     return ExprMutator::VisitExpr_(op);
   }
 
-  Call GetNewCallTIR(const CallNode* call) {
-    Tuple call_tir_args = Downcast<Tuple>(call->args[1]);
+  Call VisitCallTIR(const CallNode* call) {
     // Update fused func name
     GlobalVar gv = Downcast<GlobalVar>(call->args[0]);
-    ginfo_[cur_group_].name_hint = ginfo_[cur_group_].name_hint + "_" + gv->name_hint;
+    BaseFunc prim_func = mod_->Lookup(gv);
+    GlobalVar new_gv = this->builder_->AddFuncToContext(prim_func, gv->name_hint);
+
     // Update fused func arguments
-    Array<Expr> new_tir_args = GetNewArguments(call_tir_args->fields);
-    Array<Expr> args = {call->args[0], Tuple(new_tir_args), call->args[2]};
-    return Call(call->op, args, {}, call->type_args);
+    Tuple call_tir_args = Downcast<Tuple>(call->args[1]);
+    if (ginfo_.find(cur_group_) == ginfo_.end()) {
+      // No need to make new relax function, direct update call_tir
+      call_tir_args = Downcast<Tuple>(this->VisitExpr(call_tir_args));
+    } else {
+      call_tir_args = GetNewArguments(call_tir_args);
+
+      // Do not move this line outside the branch
+      // since c++ set will automatically insert a new element when accessing
+      ginfo_[cur_group_].name_hint = ginfo_[cur_group_].name_hint + "_" + gv->name_hint;
+    }
+
+    // Create new call
+    Array<Expr> args = {new_gv, call_tir_args, call->args[2]};
+    return Call(call->op, args, {}, call->type_args, call->span);
   }
 
-  Array<Expr> GetNewArguments(const tvm::Array<Expr>& args) {
+  Tuple GetNewArguments(const Tuple& args) {
     Array<Expr> new_args;
-    for (Expr arg : args) {
+    for (Expr arg : args->fields) {
       ICHECK(gmap_.count(arg.get()));
       auto* arg_group = gmap_.at(arg.get())->FindRoot();
       arg = VisitExpr(arg);
@@ -367,7 +376,7 @@ class FuseMutator : public ExprMutator {
         new_args.push_back(arg);
       }
     }
-    return new_args;
+    return Tuple(new_args);
   }
 
   Expr MakeNewFunction(Type type, Optional<ObjectRef> shape) {
@@ -495,6 +504,240 @@ class FuseMutator : public ExprMutator {
   GraphPartitioner::Group* cur_group_;
 };
 
+class TIRFuseMutator : public ExprMutator {
+ public:
+  static IRModule Transform(const IRModule& mod) {
+    TIRFuseMutator mutator(mod);
+
+    BaseFunc main_func = mod->Lookup("main");
+    mutator.func_info_ = FuseFuncInfo("main", false);
+    mutator.builder_->AddFuncToContext(Downcast<BaseFunc>(mutator.VisitExpr(main_func)), "main");
+
+    return mutator.builder_->GetContextIRModule();
+  }
+
+ private:
+  explicit TIRFuseMutator(const IRModule& mod) : mod_(mod) {}
+
+  Expr VisitExpr_(const CallNode* call) final {
+    static const Op& call_tir_op_ = Op::Get("relax.call_tir");
+    Expr e = ExprMutator::VisitExpr_(call);
+    call = e.as<CallNode>();
+    ICHECK(call != nullptr);
+
+    if (call->op->IsInstance<GlobalVarNode>()) {
+      // Emit primitive relax Function
+      GlobalVar gv = Downcast<GlobalVar>(call->op);
+      BaseFunc func = mod_->Lookup(gv);
+      FuseFuncInfo info = func_info_;
+      this->func_info_ = FuseFuncInfo(gv->name_hint, true);
+      GlobalVar new_gv =
+          this->builder_->AddFuncToContext(Downcast<BaseFunc>(VisitExpr(func)), gv->name_hint);
+      func_info_ = info;
+      return Call(new_gv, call->args, call->attrs, call->type_args, call->span);
+    }
+
+    if (call->op != call_tir_op_) {
+      return e;
+    }
+
+    GlobalVar gv = Downcast<GlobalVar>(call->args[0]);
+    tir::PrimFunc func = Downcast<tir::PrimFunc>(mod_->Lookup(gv));
+
+    if (func_info_.is_primitive) {
+      func_info_.prim_funcs.push_back(func);
+      // update func_info_.param_map
+      const Array<Expr> call_tir_args = Downcast<Tuple>(call->args[1])->fields;
+      for (size_t i = 0; i < call_tir_args.size(); ++i) {
+        Var arg_var = Downcast<Var>(call_tir_args[i]);
+        auto it = func_info_.var2param.find(arg_var);
+        if (it == func_info_.var2param.end()) {
+          // add it to the arg list if the arg is not the result of previous call_tir
+          func_info_.arguments.push_back(arg_var);
+        } else {
+          const tir::Var& producer_param = Downcast<tir::Var>((*it).second);
+          const tir::Var& consumer_param = func->params[i];
+          func_info_.param_map.Set(consumer_param, producer_param);
+        }
+      }
+      return e;
+    } else {
+      GlobalVar new_gv = this->builder_->AddFuncToContext(func, gv->name_hint);
+      return Call(call->op, {new_gv, call->args[1], call->args[2]}, call->attrs, call->type_args,
+                  call->span);
+    }
+  }
+
+  void VisitBinding_(const VarBindingNode* binding) final {
+    static const Op& call_tir_op_ = Op::Get("relax.call_tir");
+    if (!func_info_.is_primitive) {
+      return ExprMutator::VisitBinding_(binding);
+    }
+    Expr value = this->VisitExpr(binding->value);
+    if (const auto* call = value.as<CallNode>()) {
+      if (!binding->var->IsInstance<DataflowVarNode>()) {
+        // Emit call_tir func if it's the output call
+        tir::PrimFunc func = tir::FusePrimFuncs(func_info_.prim_funcs, func_info_.param_map);
+        GlobalVar gv = this->builder_->AddFuncToContext(func, func_info_.name_hint);
+        Array<Expr> call_args = {gv, Tuple(func_info_.arguments), call->args[2]};
+        Call new_call_tir(call_tir_op_, call_args, call->attrs, call->type_args);
+        Var output = this->builder_->EmitOutput(new_call_tir);
+        this->var_remap_[binding->var->vid] = output;
+      } else {
+        // Update func_info_.var2param
+        GlobalVar gv = Downcast<GlobalVar>(call->args[0]);
+        tir::PrimFunc func = Downcast<tir::PrimFunc>(mod_->Lookup(gv));
+        const Expr& output_shapes = call->args[2];
+        if (const auto* tuple_output_shapes = output_shapes.as<TupleNode>()) {
+          // set var2param to a array if there is more than one output.
+          size_t output_size = tuple_output_shapes->fields.size();
+          Array<tir::Var> output_param(func->params.end() - output_size, func->params.end());
+          func_info_.var2param.Set(binding->var, output_param);
+        } else {
+          func_info_.var2param.Set(binding->var, func->params.back());
+        }
+      }
+    } else if (const auto* tuple_get_item = value.as<TupleGetItemNode>()) {
+      ICHECK(binding->var->IsInstance<DataflowVarNode>())
+          << "Currently TupleGetItem outputs are not allowed";
+      const Var& tuple_var = Downcast<Var>(tuple_get_item->tuple);
+      auto it = func_info_.var2param.find(tuple_var);
+      if (it == func_info_.var2param.end()) {
+        // Directly emit tuple if it's extern input
+        Var lv = this->builder_->Emit(value);
+        this->var_remap_[binding->var->vid] = lv;
+      } else {
+        // Update var2param if the input is local var
+        Array<tir::Var> params = Downcast<Array<tir::Var>>((*it).second);
+        func_info_.var2param.Set(binding->var, params[tuple_get_item->index]);
+      }
+    } else {
+      LOG(FATAL) << "Unsupported binding value: " << value;
+    }
+  }
+
+ private:
+  struct FuseFuncInfo {
+    FuseFuncInfo() = default;
+    FuseFuncInfo(const String& name_hint, bool is_primitive)
+        : name_hint(name_hint), is_primitive(is_primitive) {}
+
+    /*! \brief The relax function name hint */
+    String name_hint = "";
+    /*! \brief An boolean indicate if the function if to be fused */
+    bool is_primitive = false;
+    /*! \brief The prim_funcs to be fused. */
+    Array<tir::PrimFunc> prim_funcs;
+    /*!
+     * \brief The mapping from relax to prim_func param
+     * \note The rhs can be a tir::Var or Array<tir::Var> (for tuple return)
+     */
+    Map<Var, ObjectRef> var2param;
+    /*!
+     * \brief A map indicate how data exchange between functions.
+     *        The map is from consumer params to the producer params.
+     */
+    Map<tir::Var, tir::Var> param_map;
+    /*! \brief The arguments for calling prim_func */
+    Array<Expr> arguments;
+  };
+
+  /*! \brief The IRModule */
+  const IRModule& mod_;
+  /*! \brief The IRModule */
+  FuseFuncInfo func_info_;
+};
+
+class Inliner : public ExprMutator {
+ public:
+  static IRModule Transform(const IRModule& mod) {
+    Inliner inliner(mod);
+    for (const auto& kv : mod->functions) {
+      BaseFunc func = kv.second;
+      const GlobalVar& global_var = kv.first;
+      // We won't add current PrimFunc to the context
+      if (global_var->name_hint == "main") {
+        Expr new_func = inliner.VisitExpr(func);
+        inliner.builder_->AddFuncToContext(Downcast<BaseFunc>(new_func), global_var->name_hint);
+      } else if (func->IsInstance<tir::PrimFuncNode>()) {
+        inliner.builder_->AddFuncToContext(func, global_var->name_hint);
+      }
+    }
+
+    return inliner.builder_->GetContextIRModule();
+  }
+
+ private:
+  explicit Inliner(const IRModule& mod) : mod_(mod) {}
+
+  void VisitBinding_(const VarBindingNode* binding) final {
+    Optional<Function> _relax_func = get_relax_call(binding);
+    if (!_relax_func.defined()) {
+      return ExprMutator::VisitBinding_(binding);
+    }
+    Function relax_func = _relax_func.value();
+    Call call = Downcast<Call>(binding->value);
+    VisitPrimitiveFunc(relax_func, call->args, binding->var);
+  }
+
+ private:
+  void VisitPrimitiveFunc(const Function& func, const Array<Expr>& args, const Var& binding_var) {
+    // update var_remap_ via function params
+    ICHECK_EQ(func->params.size(), args.size());
+    for (size_t i = 0; i < func->params.size(); ++i) {
+      const Var& param = func->params[i];
+      const Expr& arg = args[i];
+      this->var_remap_[param->vid] = Downcast<Var>(arg);
+    }
+
+    const auto* seq = func->body.as<SeqExprNode>();
+    ICHECK(seq != nullptr);
+    ICHECK_EQ(seq->blocks.size(), 1);
+    const BindingBlock& block = seq->blocks[0];
+    ICHECK(block->IsInstance<DataflowBlockNode>());
+    for (const Binding& binding : block->bindings) {
+      if (const auto* var_binding = binding.as<VarBindingNode>()) {
+        Var var = this->builder_->Emit(VisitExpr(var_binding->value));
+        this->var_remap_[var_binding->var->vid] = var;
+      } else {
+        ICHECK(false) << "Unsupported binding";
+      }
+    }
+    // Update return value remap
+    Var return_var = Downcast<Var>(seq->body);
+    this->var_remap_[binding_var->vid] = this->var_remap_[return_var->vid];
+  }
+
+  Optional<Function> get_relax_call(const VarBindingNode* binding) {
+    const auto* call = binding->value.as<CallNode>();
+    // Cond 1. binding value is a call node.
+    if (call == nullptr) return NullOpt;
+    // Cond 2. Call node op must be GlobalVar
+    if (!call->op->IsInstance<GlobalVarNode>()) return NullOpt;
+    GlobalVar gv = Downcast<GlobalVar>(call->op);
+    // Cond 3. The GlobalVar must be in the IRModule
+    auto it = mod_->functions.find(gv);
+    if (it == mod_->functions.end()) return NullOpt;
+    // Cond 4. The function must be a relax function
+    const BaseFunc& func = (*it).second;
+    if (!func->IsInstance<FunctionNode>()) return NullOpt;
+    return Downcast<Function>(func);
+  }
+
+ private:
+  const IRModule& mod_;
+};
+
+IRModule FuseOps(IRModule mod, int opt_level, size_t max_fuse_depth) {
+  mod = RelaxFuseMutator::Transform(mod, opt_level, max_fuse_depth);
+  mod = TIRFuseMutator::Transform(mod);
+  // const auto* f = runtime::Registry::Get("script.AsRelaxScript");
+  // String s = (*f)(mod, false);
+  // std::cout << s << std::endl;
+  mod = Inliner::Transform(mod);
+  return mod;
+}
+
 namespace transform {
 
 Pass FuseOps(int fuse_opt_level) {
@@ -502,7 +745,7 @@ Pass FuseOps(int fuse_opt_level) {
       [=](IRModule m, PassContext pc) {
         int opt_level = fuse_opt_level == -1 ? pc->opt_level : fuse_opt_level;
         auto max_fuse_depth = pc->GetConfig("relax.FuseOps.max_depth", Integer(kMaxFusedOps));
-        return FuseMutator::Transform(m, opt_level, max_fuse_depth.value());
+        return relax::FuseOps(m, opt_level, max_fuse_depth.value());
       };
   return CreateModulePass(/*pass_function=*/pass_func,  //
                           /*opt_level=*/0,              //
