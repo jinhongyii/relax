@@ -655,6 +655,22 @@ Array<arith::IntSet> AnalyzeRegionLowerBound(const BufferRegion& region, const P
                                              const StmtSRef& dom_low_inclusive,
                                              const StmtSRef& dom_high_exclusive,
                                              arith::Analyzer* analyzer);
+/*!
+ * \brief Provided the access pattern to a buffer, suggest one of the possible layout
+ * transformation to minimize the locality of the access pattern.
+ * \param buffer The buffer to be transformed
+ * \param indices The access pattern to the buffer
+ * \param loops The loops above the buffer
+ * \param predicate The predicate of the access
+ * \param analyzer Arithmetic analyzer
+ */
+Optional<IndexMap> SuggestIndexMap(const Buffer& buffer, const Array<PrimExpr>& indices,
+                                   const Array<For>& loops, const PrimExpr& predicate,
+                                   arith::Analyzer* analyzer);
+
+Optional<IndexMap> SuggestIndexMap(const Buffer& buffer, BlockRealize realize, const Array<For>&
+                                                                                   loops,
+                                   arith::Analyzer* analyzer);
 
 }  // namespace tir
 }  // namespace tvm

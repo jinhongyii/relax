@@ -306,6 +306,8 @@ class ExprMutator : public ExprFunctor<Expr(const Expr&)> {
 
   /*! \brief Remap a var to a new var in use-site. */
   std::unordered_map<Id, Var, ObjectPtrHash, ObjectPtrEqual> var_remap_;
+  
+  
 };
 
 }  // namespace relax

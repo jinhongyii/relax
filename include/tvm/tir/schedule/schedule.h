@@ -529,7 +529,6 @@ class ScheduleNode : public runtime::Object {
    * \param ann_key The annotation key
    */
   virtual void Unannotate(const BlockRV& block_rv, const String& ann_key) = 0;
-
   /******** Schedule: Layout transformation ********/
   /*!
    * \brief Apply a transformation represented by IndexMap to buffer
