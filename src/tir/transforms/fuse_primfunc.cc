@@ -333,7 +333,8 @@ PrimFunc FusePrimFuncs(const Array<PrimFunc>& funcs, const Map<Var, Var>& param_
     attr_map.Set("global_symbol", String(global_name));
   }
 
-  return PrimFunc(params, body, VoidType(), buffer_map, DictAttrs(attr_map));
+  return PrimFunc(params, body, VoidType(), buffer_map, Optional<Map<tir::Var, Buffer>>(),
+                  DictAttrs(attr_map));
 }
 
 /**************** FFI ****************/
