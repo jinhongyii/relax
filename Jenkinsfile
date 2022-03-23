@@ -254,13 +254,13 @@ def python_unittest(image) {
 def fsim_test(image) {
   sh (
     script: "${docker_run} ${image} ./tests/scripts/task_python_vta_fsim.sh",
-    label: 'Run VTA tests in FSIM',
+    label: 'Run VTA tests in FSIM ',
   )
 }
 
 def cmake_build(image, path, make_flag) {
   sh (
-    script: "${docker_run} ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod",
+    script: "${docker_run} ${image} ./tests/scripts/task_build.sh ${path} ${make_flag}",
     label: 'Run cmake build',
   )
 }
