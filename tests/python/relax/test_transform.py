@@ -457,6 +457,30 @@ def test_annotate_opkind_injective():
     new_mod =relax.transform.AnnotateOpKind()(mod)
     assert new_mod["injective"].attrs["op_pattern"] == 2
 
+def test_annotate_op_kind_bias_add():
+    @tvm.script.ir_module
+    class InputModule:
+        @T.prim_func
+        def tir_bias_add(rxplaceholder_2: T.Buffer[(1, 1000), "float32"], rxplaceholder_3: T.Buffer[(1000,), "float32"], T_add_1: T.Buffer[(1, 1000), "float32"]) -> None:
+            # function attr dict
+            T.func_attr({"global_symbol": "tir_bias_add", "tir.noalias": True, "op_pattern": 8})
+            # body
+            # with T.block("root")
+            for i0, i1 in T.grid(1, 1000):
+                with T.block("T_add"):
+                    ax0, ax1 = T.axis.remap("SS", [i0, i1])
+                    T.reads(rxplaceholder_2[ax0, ax1], rxplaceholder_3[ax1])
+                    T.writes(T_add_1[ax0, ax1])
+                    T_add_1[ax0, ax1] = rxplaceholder_2[ax0, ax1] + rxplaceholder_3[ax1]
+
+        @R.function
+        def foo(x: Tensor[(1, 1000), "float32"], y: Tensor[(1000, ), "float32"]) -> Tensor:
+            gv0 = R.call_tir(tir_bias_add, (x, y), (1, 1000), dtype="float32")
+            return gv0
+
+    mod = InputModule
+    new_mod =relax.transform.AnnotateOpKind()(mod)
+    assert new_mod["tir_bias_add"].attrs["op_pattern"] == 1
 
 def test_layout_rewrite():
     @tvm.script.ir_module
