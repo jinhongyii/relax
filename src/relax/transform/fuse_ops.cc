@@ -98,6 +98,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
 
  private:
   void VisitExpr_(const ConstantNode* op) final {
+    this->CreateNode(op);
     this->AddNode(op);
     IndexedForwardGraph::Node* node = graph_.node_map.at(op);
     DataType dtype = DataType(op->data->dtype);
@@ -169,8 +170,8 @@ class IndexedForwardGraphCreator : private ExprVisitor {
       op_pattern = static_cast<OpPatternKind>(func_pattern);
 
       for (const Expr& arg : args->fields) {
-        this->UpdateEdge(arg, node, op_pattern);
         this->VisitExpr(arg);
+        this->UpdateEdge(arg, node, op_pattern);
       }
     } else {
       LOG(FATAL) << "The call op " << op->op << " is not supported in dataflow block for now.";
@@ -207,7 +208,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
    *               The source is external if the parent is nullptr.
    * \param pattern The relation pattern between the node and its parent.
    */
-  void UpdateEdge(Expr node, IndexedForwardGraph::Node* parent, OpPatternKind pattern) {
+  void UpdateEdge(const Expr& node, IndexedForwardGraph::Node* parent, OpPatternKind pattern) {
     const tvm::Object* key = node.get();
     auto it = graph_.node_map.find(key);
     ICHECK(it != graph_.node_map.end());
@@ -308,10 +309,12 @@ class RelaxFuseMutator : public ExprMutator {
       }
     } else {
       Expr new_value = this->VisitExpr(binding->value);
-      builder_->EmitOutput(new_value);
       if (cur_group_->root_ref == var.get()) {
-        Var new_var = builder_->Emit(MakeNewFunction(var->checked_type(), var->shape_));
+        builder_->EmitOutput(new_value);
+        Var new_var = builder_->Emit(MakeNewFunction());
         this->var_remap_[var->vid] = new_var;
+      } else {
+        builder_->Emit(new_value);
       }
     }
   }
@@ -369,7 +372,7 @@ class RelaxFuseMutator : public ExprMutator {
       ICHECK(gmap_.count(arg.get()));
       auto* arg_group = gmap_.at(arg.get())->FindRoot();
       arg = VisitExpr(arg);
-      if (cur_group_ != arg_group) {
+      if (cur_group_ != arg_group && arg->IsInstance<VarNode>()) {
         Var param = ginfo_[cur_group_].GetOrAllocParam(arg);
         new_args.push_back(param);
       } else {
@@ -379,9 +382,7 @@ class RelaxFuseMutator : public ExprMutator {
     return Tuple(new_args);
   }
 
-  Expr MakeNewFunction(Type type, Optional<ObjectRef> shape) {
-    // TODO(Siyuan): type is not necessary here, since it can be inferred from output body
-    //               However, current call_tir convension will block this inference
+  Expr MakeNewFunction() {
     const GroupInfo& ginfo = ginfo_[cur_group_];
     DataflowBlock block = Downcast<DataflowBlock>(builder_->EndBlock());
     Optional<Expr> output_body;
@@ -400,8 +401,8 @@ class RelaxFuseMutator : public ExprMutator {
     }
     ICHECK(output_body) << "There should be at least one output.";
     const Expr& body = output_body.value();
-    auto func = Function(NullOpt, ginfo.params, SeqExpr({block}, body), type);
-    func->shape_ = shape;
+    auto func = Function(NullOpt, ginfo.params, SeqExpr({block}, body), body->checked_type());
+    func->shape_ = body->shape_;
     GlobalVar gv = builder_->AddFuncToContext(func, ginfo.name_hint);
     return Call(gv, ginfo.arguments);
   }
@@ -432,6 +433,7 @@ class RelaxFuseMutator : public ExprMutator {
         : gmap_(gmap) {}
 
     void TryPrintGroup(const ObjectRef& object) {
+      if (object->IsInstance<ConstantNode>()) return;
       if (skip_objects_.count(object.get())) return;
       auto it = gmap_.find(object.get());
       if (it == gmap_.end()) return;
@@ -549,15 +551,21 @@ class TIRFuseMutator : public ExprMutator {
       // update func_info_.param_map
       const Array<Expr> call_tir_args = Downcast<Tuple>(call->args[1])->fields;
       for (size_t i = 0; i < call_tir_args.size(); ++i) {
-        Var arg_var = Downcast<Var>(call_tir_args[i]);
-        auto it = func_info_.var2param.find(arg_var);
-        if (it == func_info_.var2param.end()) {
-          // add it to the arg list if the arg is not the result of previous call_tir
-          func_info_.arguments.push_back(arg_var);
+        if (call_tir_args[i]->IsInstance<ConstantNode>()) {
+          func_info_.arguments.push_back(call_tir_args[i]);
+        } else if (call_tir_args[i]->IsInstance<VarNode>()) {
+          Var arg_var = Downcast<Var>(call_tir_args[i]);
+          auto it = func_info_.var2param.find(arg_var);
+          if (it == func_info_.var2param.end()) {
+            // add it to the arg list if the arg is not the result of previous call_tir
+            func_info_.arguments.push_back(arg_var);
+          } else {
+            const tir::Var& producer_param = Downcast<tir::Var>((*it).second);
+            const tir::Var& consumer_param = func->params[i];
+            func_info_.param_map.Set(consumer_param, producer_param);
+          }
         } else {
-          const tir::Var& producer_param = Downcast<tir::Var>((*it).second);
-          const tir::Var& consumer_param = func->params[i];
-          func_info_.param_map.Set(consumer_param, producer_param);
+          ICHECK(false) << "Only var and constant are allowed";
         }
       }
       return e;
@@ -730,10 +738,10 @@ class Inliner : public ExprMutator {
 
 IRModule FuseOps(IRModule mod, int opt_level, size_t max_fuse_depth) {
   mod = RelaxFuseMutator::Transform(mod, opt_level, max_fuse_depth);
-  mod = TIRFuseMutator::Transform(mod);
   // const auto* f = runtime::Registry::Get("script.AsRelaxScript");
   // String s = (*f)(mod, false);
   // std::cout << s << std::endl;
+  mod = TIRFuseMutator::Transform(mod);
   mod = Inliner::Transform(mod);
   return mod;
 }
