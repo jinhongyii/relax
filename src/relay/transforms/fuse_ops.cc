@@ -95,7 +95,7 @@ class IndexedForwardGraphCreator : private ExprVisitor {
   IndexedForwardGraph Prepare(const Expr& body) {
     this->Update(body, nullptr, kOpaque);
     this->VisitExpr(body);
-    graph_.DebugDump();
+    // graph_.DebugDump();
     return std::move(graph_);
   }
 
