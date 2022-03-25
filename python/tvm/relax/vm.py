@@ -66,7 +66,7 @@ class VirtualMachine(object):
 
     def __init__(
         self,
-        exec: Executable,
+        exec: Union[Executable, Module],
         device: Union[Device, List[Device]],
         memory_cfg: Optional[Union[str, Dict[Device, str]]] = None,
     ) -> None:
@@ -75,7 +75,7 @@ class VirtualMachine(object):
 
         Parameters
         ----------
-        exec: Executable
+        exec: Union[Executable, Module]
             The VM executable.
 
         device : Union[Device, List[Device]]
@@ -89,7 +89,11 @@ class VirtualMachine(object):
             type specified in the dict, or pooled allocator if not specified in the
             dict.
         """
-        self.module = exec.mod["vm_load_executable"]()
+        self.module = (
+            exec.mod["vm_load_executable"]()
+            if isinstance(exec, Executable)
+            else exec["vm_load_executable"]()
+        )
         self._setup_device(device, memory_cfg)
 
     def _setup_device(self, dev: Device, memory_cfg: Union[str, Dict[Device, str]]) -> None:
@@ -126,7 +130,7 @@ class VirtualMachine(object):
             init_args.append(device.device_id)
             alloc_type = memory_cfg[device] if device in memory_cfg else default_alloc_type
             init_args.append(alloc_type)
-        _ffi_api.VirtualMachineInit(self.module, *init_args)
+        self.module["vm_initialization"](*init_args)
 
     def __getitem__(self, key: str) -> PackedFunc:
         return self.module[key]
