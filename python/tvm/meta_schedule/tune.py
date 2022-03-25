@@ -21,7 +21,7 @@ import os.path
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 
 from tvm._ffi.registry import register_func
-from tvm.ir import IRModule, structural_hash
+from tvm.ir import IRModule, structural_hash, structural_equal
 from tvm.ir.transform import PassContext
 from tvm.runtime import Module, NDArray
 from tvm.target import Target

@@ -41,5 +41,6 @@ from .tune import (
     tune_relax,
     tune_te,
     tune_tir,
+    tune_relax,
 )
 from .tune_context import TuneContext
