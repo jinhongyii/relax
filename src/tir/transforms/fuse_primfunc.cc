@@ -180,6 +180,49 @@ class BufferSubstituter : private StmtExprMutator {
 };
 
 /*!
+ * \brief A mutator which detect block name duplication and deduplicate the names.
+ */
+class BlockNameDeduplicator : public StmtMutator {
+ private:
+  Stmt VisitStmt_(const BlockNode* block) final {
+    // Step 1. Get the unique name of this block.
+    String name = GetUniqueName(block->name_hint);
+
+    // Step 2. Recursively mutate the init and the body of this block.
+    Optional<Stmt> init = NullOpt;
+    if (block->init.defined()) {
+      init = VisitStmt(block->init.value());
+    }
+    Stmt body = VisitStmt(block->body);
+
+    // Step 3. If everything remains unchanged, return the original block. Otherwise return the new
+    // block.
+    if (name == block->name_hint && init.same_as(block->init) && body.same_as(block->body)) {
+      return GetRef<Block>(block);
+    } else {
+      ObjectPtr<BlockNode> n = CopyOnWrite(block);
+      n->name_hint = std::move(name);
+      n->body = std::move(body);
+      n->init = std::move(init);
+      return Stmt(n);
+    }
+  }
+
+  String GetUniqueName(const String& prefix) {
+    String unique_prefix = prefix;
+    auto it = name_count_.find(prefix);
+    while (name_count_.count(unique_prefix)) {
+      unique_prefix = prefix + "_" + std::to_string(++it->second);
+    }
+    name_count_[unique_prefix] = 0;
+    return unique_prefix;
+  }
+
+  /*! \brief The count map to make block name unique. */
+  std::unordered_map<String, int> name_count_;
+};
+
+/*!
  * \brief Fuse multiple PrimFuncs into fused one
  * \param funcs The PrimFuncs should be inlined. The list guides the order of fusion.
  * \param param_map A map indicate how data exchange between functions.
@@ -305,7 +348,8 @@ PrimFunc FusePrimFuncs(const Array<PrimFunc>& funcs, const Map<Var, Var>& param_
   }
 
   // Step 7. Creating new body
-  Stmt body = Block({}, {}, {}, "root", SeqStmt::Flatten(bodies), NullOpt, alloc_buffers);
+  Stmt body = BlockNameDeduplicator().operator()(SeqStmt::Flatten(bodies));
+  body = Block({}, {}, {}, "root", std::move(body), NullOpt, alloc_buffers);
   body = BlockRealize({}, Bool(true), Downcast<Block>(body));
 
   // Step 8. Substitute buffers
