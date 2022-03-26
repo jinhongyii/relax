@@ -16,12 +16,14 @@
 # under the License.
 import os
 
+from typing import Dict
+
 import tvm
 import tvm.testing
 import tvm.relay.testing
 import tvm.meta_schedule as ms
 
-from tvm import tir, relax
+from tvm import tir, relay, relax, runtime
 from tvm import transform
 from tvm.ir.module import IRModule
 from tvm.meta_schedule import tune_relax, EvolutionarySearchConfig
@@ -105,6 +107,24 @@ logging.getLogger("tvm.meta_schedule").setLevel(logging.DEBUG)
 ARGS = _parse_args()
 
 
+def apply_opt_before_tuning(relay_mod: IRModule, params: Dict[str, runtime.NDArray]):
+    relay_mod = relay.transform.SimplifyInference()(relay_mod)
+    main_func = relay_mod["main"]
+    bind_main_func = relay.build_module.bind_params_by_name(main_func, params)
+
+    relax_mod = relay_translator.from_relay(bind_main_func)
+    relax_mod = relax.transform.AnnotateTIROpPattern()(relax_mod)
+    relax_mod = relax.transform.FuseOps()(relax_mod)
+    return relax_mod
+
+
+def apply_opt_after_tuning(relax_mod: IRModule, database: ms.database.Database, target: Target):
+    relax_mod = relax.transform.MetaScheduleApplyHistoryBest(database, target)(relax_mod)
+    relax_mod = relax.transform.LayoutRewrite()(relax_mod)
+    relax_mod = relax.transform.FoldConstant()(relax_mod)
+    return relax_mod
+
+
 def f_build(mod, target, params):
     with transform.PassContext(opt_level=3):
         executable = relax.vm.build(mod=mod, target=target)
@@ -169,12 +189,14 @@ def main():
     )
 
     # translate the ResNet model from Relay to Relax
-    relax_mod = relay_translator.from_relay(relay_mod["main"])
-    assert isinstance(relax_mod, tvm.IRModule)
+    relax_mod_w_opt = apply_opt_before_tuning(relay_mod=relay_mod, params=params)
+    relax_mod_wo_opt = relay_translator.from_relay(relay_mod["main"])
+    assert isinstance(relax_mod_w_opt, tvm.IRModule)
+    assert isinstance(relax_mod_wo_opt, tvm.IRModule)
 
     if ARGS.tune_model:
         tune_relax(
-            mod=relax_mod,
+            mod=relax_mod_w_opt,
             target=ARGS.target,
             config=EvolutionarySearchConfig(
                 num_trials_per_iter=64,
@@ -191,7 +213,7 @@ def main():
             num_threads=os.cpu_count(),
         )
 
-    def run_and_measure(mod: tvm.IRModule):
+    def run_and_measure(mod: tvm.IRModule, with_constant_folding: bool):
         builder = LocalBuilder(f_build=f_build)
         builder_input = BuilderInput(mod=mod, target=ARGS.target, params=params)
         builder_result = builder.build([builder_input])[0]
@@ -199,8 +221,9 @@ def main():
         assert builder_result.artifact_path is not None
 
         args_info = [ms.arg_info.TensorInfo("float32", input_shape)]
-        for param in params.values():
-            args_info.append(ms.arg_info.TensorInfo(dtype=param.dtype, shape=param.shape))
+        if not with_constant_folding:
+            for param in params.values():
+                args_info.append(ms.arg_info.TensorInfo(dtype=param.dtype, shape=param.shape))
         runner_input = RunnerInput(
             artifact_path=builder_result.artifact_path,
             device_type=ARGS.target.kind.name,
@@ -230,10 +253,10 @@ def main():
         results = [result.value for result in runner_result.run_secs]
         return sum(results) / len(results)
 
-    relax_mod_untuned = apply_postproc(relax_mod, ARGS.target)
-    relax_mod_best = relax.transform.MetaScheduleApplyHistoryBest(database, ARGS.target)(relax_mod)
-    print(f"untuned: {run_and_measure(relax_mod_untuned)} seconds")
-    print(f"  tuned: {run_and_measure(relax_mod_best)} seconds")
+    relax_mod_wo_opt = apply_postproc(relax_mod_wo_opt, ARGS.target)
+    relax_mod_w_opt = apply_opt_after_tuning(relax_mod_w_opt, database, ARGS.target)
+    print(f"Without opt: {run_and_measure(relax_mod_wo_opt, False)} seconds")
+    print(f"With opt: {run_and_measure(relax_mod_w_opt, True)} seconds")
 
 
 if __name__ == "__main__":
