@@ -1963,6 +1963,47 @@ bool CheckInjectivePattern(const Array<PrimExpr>& indices_l, const Array<PrimExp
   return true;
 }
 
+bool CheckAllowReusePattern(const Array<PrimExpr>& indices_l, const Array<PrimExpr>& indices_r) {
+  std::unordered_set<const VarNode*> vars;
+  for (int i = 0; i < static_cast<int>(indices_l.size()); i++) {
+    if (const auto* v = indices_l[i].as<VarNode>()) {
+      vars.insert(v);
+    } else {
+      return false;
+    }
+  }
+  for (const PrimExpr& e : indices_r) {
+    PreOrderVisit(e, [&](const ObjectRef& node){
+      if (const auto* v = node.as<VarNode>()) {
+        if(vars.count(v)) {
+          vars.erase(v);
+        }
+      }
+      return true;
+    });
+  }
+  return !vars.empty();
+}
+
+bool CheckFMA(Stmt body) {
+  if (const auto* store = body.as<BufferStoreNode>()) {
+    if (const auto* add = store->value.as<AddNode>()) {
+      if (const auto* l = add->a.as<BufferLoadNode>()) {
+        if(const auto* r = add->b.as<MulNode>()) {
+          bool incremental = store->buffer.same_as(l->buffer) && CheckSameArray(store->indices,
+                                                                                l->indices);
+          const auto* l_operand = r->a.as<BufferLoadNode>();
+          const auto* r_operand = r->b.as<BufferLoadNode>();
+          if (incremental && l_operand && r_operand) {
+            return CheckAllowReusePattern(store->indices, l_operand->indices) &&
+                   CheckAllowReusePattern(store->indices, r_operand->indices);
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
 class PatternKindAnalyzer: public StmtExprVisitor {
   void VisitStmt_(const BufferStoreNode* op) final {
     store_indices_ = op->indices;
@@ -2004,15 +2045,23 @@ class PatternKindAnalyzer: public StmtExprVisitor {
       kind_ = std::max(kind_, index_pair_pattern);
       return;
     }
-    
+    bool has_reduction = false;
     for (IterVar it : op->iter_vars) {
       if (it->iter_type == kCommReduce) {
-        kind_ = std::max(kind_, relay::kCommReduce);
-        return;
+        has_reduction =true;
+        break;
       }
     }
-    
-    kind_ = relay::kOpaque;
+    if (has_reduction) {
+      if (CheckFMA(op->body)) {
+        kind_ = std::max(kind_, relay::kOutEWiseFusable);
+      } else {
+        kind_ = std::max(kind_, relay::kCommReduce);
+      }
+    } else {
+      kind_ = relay::kOpaque;
+    }
+
   }
   
   Array<PrimExpr> store_indices_;

@@ -92,7 +92,7 @@ TVM_DLL Pass MetaScheduleApplyHistoryBest(const tvm::meta_schedule::Database& da
  *
  * \return The Pass.
  */
-TVM_DLL Pass AnnotateOpKind();
+TVM_DLL Pass AnnotateTIROpPattern();
 
 /*!
  * \brief Layout Rewrite
@@ -115,6 +115,13 @@ TVM_DLL Pass FoldConstant();
  * \return The Pass.
  */
 TVM_DLL Pass FuseOps(int fuse_opt_level = -1);
+
+/*!
+ * \brief Bind params of main function of the module to constant tensors.
+ *
+ * \return The Pass.
+ */
+ TVM_DLL Pass BindParams(Map<String, runtime::NDArray> params);
 
 }  // namespace transform
 }  // namespace relax
