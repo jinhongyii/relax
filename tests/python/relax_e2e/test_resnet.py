@@ -82,7 +82,7 @@ def test_class_irmodule(dev: str):
 
     # translate the ResNet model from Relay to Relax
     relax_mod = relay_translator.from_relay(bind_main_func)
-    relax_mod = relax.transform.AnnotateOpKind()(relax_mod)
+    relax_mod = relax.transform.AnnotateTIROpPattern()(relax_mod)
     relax_mod = relax.transform.FuseOps()(relax_mod)
 
 

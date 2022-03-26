@@ -17,8 +17,8 @@
 * under the License.
 */
 /*!
-* \file src/relax/transform/annotate_opkind.cc
-* \brief Annotate OpKind for TIR functions
+* \file src/relax/transform/annotate_tir_op_pattern.cc
+* \brief Annotate Op Pattern for TIR functions
 */
 #include <tvm/relax/attrs/memory.h>
 #include <tvm/relax/transform.h>
@@ -51,13 +51,13 @@ IRModule Annotate(IRModule m) {
 
 namespace transform {
 
-Pass AnnotateOpKind() {
+Pass AnnotateTIROpPattern() {
   runtime::TypedPackedFunc<IRModule(IRModule, PassContext)> pass_func =
       [=](IRModule mod, PassContext pc) { return Annotate(mod); };
   return CreateModulePass(pass_func, 0, "VMShapeLower", {});
 }
 
-TVM_REGISTER_GLOBAL("relax.transform.AnnotateOpKind").set_body_typed(AnnotateOpKind);
+TVM_REGISTER_GLOBAL("relax.transform.AnnotateTIROpPattern").set_body_typed(AnnotateTIROpPattern);
 
 }  // namespace transform
 

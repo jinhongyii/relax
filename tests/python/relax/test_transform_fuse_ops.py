@@ -66,7 +66,7 @@ def test_fuse_resnet():
     relay_mod, _ = testing.resnet.get_workload(num_layers=50, batch_size=1, dtype="float32")
     mod = relay_translator.from_relay(relay_mod["main"])
 
-    mod = relax.transform.AnnotateOpKind()(mod)
+    mod = relax.transform.AnnotateTIROpPattern()(mod)
     mod = relax.transform.FuseOps()(mod)
     print(R.parser.astext(mod))
 
