@@ -25,57 +25,25 @@
 #include <tvm/relay/interpreter.h>
 #include <tvm/tir/op.h>
 
-#include "../../relay/op/memory/on_device.h"
-#include "../../relay/transforms/pattern_utils.h"
 namespace tvm {
 namespace relax {
 
 /*!
- * \brief Returns whether \p expr is a literal \p Constant, optionally wrapped by an "on_device"
- * annotation CallNode (which serves only to associate an \p VirtualDevice to the constant and has
- * no operational effect).
+ * \brief Returns whether \p expr is a literal \p Constant,
  */
-bool IsSimpleConstant(const Expr& expr) {
-  return relay::AsIgnoringOnDevice<ConstantNode>(expr) != nullptr;
-}
-
-/*!
- * \brief Returns whether \p expr \p IsSimpleConstant directly or is a tuple of
- * \p IsComplexConstant expressions.
- */
-bool IsComplexConstant(const Expr& expr) {
-  if (IsSimpleConstant(expr)) {
-    return true;
-  } else if (const auto* tuple_node = relay::AsIgnoringOnDevice<TupleNode>(expr)) {
-    return std::all_of(tuple_node->fields.begin(), tuple_node->fields.end(), IsComplexConstant);
-  } else {
-    return false;
-  }
-}
+bool IsSimpleConstant(const Expr& expr) { return expr->IsInstance<relay::ConstantNode>(); }
 
 class ConstantFolder : public ExprMutator {
-  // Convert value to expression.
-  Expr ObjectToExpr(const ObjectRef& value) {
-    if (value->IsInstance<runtime::NDArray::ContainerType>()) {
-      auto nd_array = Downcast<runtime::NDArray>(value);
-      return Constant(nd_array);
-    } else if (const auto* val = value.as<runtime::ADTObj>()) {
-      runtime::ADT adt = GetRef<runtime::ADT>(val);
-      Array<Expr> fields;
-      for (size_t i = 0; i < adt.size(); ++i) {
-        fields.push_back(ObjectToExpr(adt[i]));
-      }
-      return Tuple(fields);
-    } else {
-      LOG(FATAL) << "Cannot handle " << value->GetTypeKey();
-      return {};
-    }
-  }
-
   Expr ConstEvaluateTIR(GlobalVar tir_f_var, const Array<Expr>& args, ShapeExpr shape) {
     auto tir_f = module_->functions.Get(tir_f_var).value();
-    auto module = build(LowerPrimFunc(Downcast<tir::PrimFunc>(tir_f), "tir_function"),
-                        eval_cpu_target_, eval_cpu_target_);
+    runtime::Module module;
+    if (func_build_cache_.count(tir_f)) {
+      module = func_build_cache_.Get(tir_f).value();
+    } else {
+      module = build(LowerPrimFunc(Downcast<tir::PrimFunc>(tir_f), "tir_function"),
+                     eval_cpu_target_, eval_cpu_target_);
+      func_build_cache_.Set(tir_f, module);
+    }
     TVMRetValue ret;
 
     //    Array<ObjectRef> args_for_tir = {args.begin(), args.end()};
@@ -102,7 +70,7 @@ class ConstantFolder : public ExprMutator {
     }
     module.GetFunction("tir_function")
         .CallPacked(TVMArgs(values, type_codes, args_for_tir.size()), &ret);
-    return ObjectToExpr(ret_tensor);
+    return Constant(Downcast<runtime::NDArray>(ObjectRef(ret_tensor)));
   }
 
  public:
@@ -110,77 +78,90 @@ class ConstantFolder : public ExprMutator {
 
   Expr ForwardBinding(Expr e) {
     if (const auto* v = e.as<VarNode>()) {
-      if (memo_.count(GetRef<Var>(v))) {
-        return ForwardBinding(memo_.Get(GetRef<Var>(v)).value());
+      // check that the var is not the input param, otherwise the function will crash
+      if (visited_varbinding.count(v)) {
+        return LookupBinding(GetRef<Var>(v));
       }
     }
     return e;
+  }
+
+  Expr VisitCallTIR(Call call) {
+    Array<Expr> args;
+    Expr op = call->op;
+    if (call->args[1].as<TupleNode>()) {
+      args = Downcast<Tuple>(call->args[1])->fields;
+    } else {
+      args.push_back(call->args[1]);
+    }
+    op = call->args[0];
+    Array<Expr> processed_args;
+    for (const auto& e : args) {
+      processed_args.push_back(ForwardBinding(e));
+    }
+    if (!std::all_of(processed_args.begin(), processed_args.end(), IsSimpleConstant)) {
+      // At least one non-constant argument.
+      return std::move(call);
+    }
+    // During evaluation we have obviously lost all on_device annotations. However any
+    // on_device wrapping this call will be left in place.
+    try {
+      auto fold_result = ConstEvaluateTIR(Downcast<GlobalVar>(op), processed_args,
+                                          Downcast<ShapeExpr>(call->args[2]));
+      return fold_result;
+    } catch (tvm::Error& error) {
+      return std::move(call);
+    }
   }
 
   Expr VisitExpr_(const CallNode* call) override {
     // post-order mutation
     Call post_call = Downcast<Call>(VisitExprPostOrder_(call));
     static const Op& call_tir_op = Op::Get("relax.call_tir");
-    Array<Expr> args;
-    Expr op = call->op;
+
     if (call->op.same_as(call_tir_op)) {
-      if (call->args[1].as<TupleNode>()) {
-        args = Downcast<Tuple>(call->args[1])->fields;
-      } else {
-        args.push_back(call->args[1]);
-      }
-      op = call->args[0];
+      return VisitCallTIR(post_call);
     } else {
       return std::move(post_call);
     }
-    Array<Expr> processed_args;
-    for (const auto& e : args) {
-      processed_args.push_back(ForwardBinding(e));
-    }
-    if (!std::all_of(processed_args.begin(), processed_args.end(), IsComplexConstant)) {
-      // At least one non-constant argument.
-      return std::move(post_call);
-    }
-    // During evaluation we have obviously lost all on_device annotations. However any
-    // on_device wrapping this call will be left in place.
-    auto tmp = ConstEvaluateTIR(Downcast<GlobalVar>(op), processed_args,
-                                Downcast<ShapeExpr>(call->args[2]));
-
-    return tmp;
   }
 
-  void VisitBinding_(const VarBindingNode* binding) {
-    memo_.Set(binding->var, binding->value);
+  void VisitBinding_(const VarBindingNode* binding) final {
+    visited_varbinding.insert(binding->var.get());
     ExprMutator::VisitBinding_(binding);
+  }
+
+  Expr VisitExpr_(const DataflowVarNode* op) final {
+    Var post_visit = Downcast<Var>(VisitExprPostOrder_(op));
+    if (visited_varbinding.count(op)) {
+      Expr expr = LookupBinding(GetRef<Var>(op));
+      if (expr->IsInstance<relay::ConstantNode>()) {
+        return expr;
+      }
+    }
+    return post_visit;
+  }
+  
+  Expr VisitExpr_(const VarNode* op) final {
+    Var post_visit = Downcast<Var>(VisitExprPostOrder_(op));
+    if (visited_varbinding.count(op)) {
+      Expr expr = LookupBinding(GetRef<Var>(op));
+      if (expr->IsInstance<relay::ConstantNode>()) {
+        return expr;
+      }
+    }
+    return post_visit;
   }
 
   IRModule module_;
   Target eval_cpu_target_{"llvm"};
   Device eval_cpu_dev_{kDLCPU, /*device_id=*/0};
-  Map<Var, Expr> memo_;
-};
-
-class Substituter : public ExprMutator {
-  void VisitBinding_(const VarBindingNode* binding) {
-    memo_.Set(binding->var, binding->value);
-    ExprMutator::VisitBinding_(binding);
-  }
-
-  Expr VisitExpr_(const VarNode* op) {
-    if (auto val = memo_.Get(runtime::GetRef<Var>(op))) {
-      if (val.value()->IsInstance<ConstantNode>()) {
-        return val.value();
-      }
-    }
-    return ExprMutator::VisitExpr_(op);
-  }
-
-  Map<Var, Expr> memo_;
+  std::unordered_set<const VarNode*> visited_varbinding;
+  Map<BaseFunc, runtime::Module> func_build_cache_;
 };
 
 Expr FoldConstant(const IRModule& m, const Expr& e) {
   Expr expr = ConstantFolder(m).VisitExpr(e);
-  expr = Substituter().VisitExpr(expr);
   return expr;
 }
 

@@ -119,14 +119,14 @@ def MetaScheduleApplyHistoryBest(
     """
     return _ffi_api.MetaScheduleApplyHistoryBest(database, target)
 
-def AnnotateOpKind() -> tvm.ir.transform.Pass:
+def AnnotateTIROpPattern() -> tvm.ir.transform.Pass:
     """Annotate Op Pattern Kind for TIR functions
 
     Returns
     -------
     ret: tvm.ir.transform.Pass
     """
-    return _ffi_api.AnnotateOpKind()
+    return _ffi_api.AnnotateTIROpPattern()
 
 def LayoutRewrite() -> tvm.ir.transform.Pass:
     """Layout Rewrite
@@ -161,3 +161,17 @@ def FuseOps(fuse_opt_level=-1) -> tvm.ir.transform.Pass:
         The registered pass for operator fusion.
     """
     return _ffi_api.FuseOps(fuse_opt_level)
+
+def BindParams(params) -> tvm.ir.transform.Pass:
+    """Bind params of main function of the module to constant tensors.
+
+    Parameters
+    ----------
+    params : dict from str to ndarray
+        The map from param name to constant tensors.
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+    """
+    return _ffi_api.BindParams(params)
