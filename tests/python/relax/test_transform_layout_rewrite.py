@@ -50,7 +50,7 @@ def test_layout_rewrite():
     @tvm.script.ir_module
     class OutputModule:
         @R.function
-        def foo(x: Tensor[(16, 16), "float32"], w: Tensor[(16, 16), "float32"]) -> Tensor:
+        def foo(x: Tensor[(16, 16), "float32"], w: Tensor[(16, 16), "float32"]) -> Tensor[(16, 16), "float32"]:
             # block 0
             gv = relax.call_tir(layout_rewrite0, x, (4, 4, 4, 4), dtype="float32")
             gv0 = relax.call_tir(tir_matmul, (gv, w), (16, 16), dtype="float32")
@@ -76,7 +76,7 @@ def test_layout_rewrite():
         @T.prim_func
         def layout_rewrite0(src_1: T.Buffer[(16, 16), "float32"], tgt_1: T.Buffer[(4, 4, 4, 4), "float32"]) -> None:
             # function attr dict
-            T.func_attr({"global_symbol": "layout_rewrite0", "T.noalias": True})
+            T.func_attr({"global_symbol": "layout_rewrite0", "tir.noalias": True})
             # body
             # with T.block("root")
             for i0v, i1v in T.grid(16, 16):
@@ -87,11 +87,6 @@ def test_layout_rewrite():
                     tgt_1[i0 // 4, i1 // 4, i0 % 4, i1 % 4] = src_1[i0, i1]
     mod = InputModule
     new_mod =relax.transform.LayoutRewrite()(mod)
-    def fvisit(e):
-        if isinstance(e, relax.Call):
-            print(e.attrs)
-
-    relax.analysis.post_order_visit(OutputModule["foo"], fvisit)
     assert_structural_equal(new_mod, OutputModule, map_free_vars=True)
 
 if __name__ == "__main__":
