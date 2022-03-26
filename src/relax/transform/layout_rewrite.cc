@@ -44,9 +44,18 @@ struct LayoutRewriteInfo {
   DataType dtype;
 };
 
+Array<PrimExpr> NormalizeShapeForRelax(const Array<PrimExpr>& shape){
+  Array<PrimExpr> res;
+  for (const auto& e : shape) {
+    res.push_back(IntImm(DataType::Int(64),e.as<IntImmNode>()->value));
+  }
+  return res;
+}
+
+
 class LayoutRewriteInserter : public ExprMutator {
  public:
-  LayoutRewriteInserter(IRModule module) : module_(module) {
+  LayoutRewriteInserter(IRModule module) : module_(GetRef<IRModule>(module.CopyOnWrite())) {
     InitializeIndexMaps();
   }
   
@@ -63,7 +72,7 @@ class LayoutRewriteInserter : public ExprMutator {
           tir::Block block = sch->Get(block_rv);
           if (Optional<ObjectRef> ann = block->annotations.Get("layout_free_placeholders")) {
             auto layout_free_buffers = Downcast<Array<tir::Buffer>>(ann.value());
-
+            sch->Unannotate(block_rv, "layout_free_placeholders");
             Optional<Buffer> buffer;
             int buffer_index = -1;
             int var_index = -1;
@@ -183,7 +192,8 @@ class LayoutRewriteInserter : public ExprMutator {
             GlobalVar layout_rewrite_func = CreateFuncFromIndexMap(pr.second);
 
             Var new_var = builder_->Emit(Call(
-                call_tir_op, {layout_rewrite_func, args[pr.first], ShapeExpr(pr.second.tgt_shape)},
+                call_tir_op, {layout_rewrite_func, args[pr.first], ShapeExpr(NormalizeShapeForRelax(pr.second
+                                                                                 .tgt_shape))},
                 {}, {DynTensorType(pr.second.tgt_shape.size(), pr.second.dtype)}));
             args.Set(pr.first, new_var);
           }
@@ -196,7 +206,8 @@ class LayoutRewriteInserter : public ExprMutator {
           GlobalVar layout_rewrite_func = CreateFuncFromIndexMap(info);
 
           Var new_var = builder_->Emit(
-              Call(call_tir_op, {layout_rewrite_func, arg, ShapeExpr(info.tgt_shape)}, {},
+              Call(call_tir_op, {layout_rewrite_func, arg, ShapeExpr(NormalizeShapeForRelax(info
+                                                                                                .tgt_shape))}, {},
                    {DynTensorType(info.tgt_shape.size(), info.dtype)}));
           return Call(call_tir_op, {call->args[0], new_var, call->args[2], call->args[3]}, {},
                       call->type_args);
