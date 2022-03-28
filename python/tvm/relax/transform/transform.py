@@ -182,16 +182,6 @@ def LayoutRewrite() -> tvm.ir.transform.Pass:
     return _ffi_api.LayoutRewrite()
 
 
-def FoldConstant() -> tvm.ir.transform.Pass:
-    """Fold Constant
-
-    Returns
-    -------
-    ret: tvm.ir.transform.Pass
-    """
-    return _ffi_api.FoldConstant()
-
-
 def FuseOps(fuse_opt_level=-1) -> tvm.ir.transform.Pass:
     """Fuse operators in an expr to a larger operator according to some rules.
 
@@ -209,11 +199,15 @@ def FuseOps(fuse_opt_level=-1) -> tvm.ir.transform.Pass:
     return _ffi_api.FuseOps(fuse_opt_level)
 
 
-def BindParams(params) -> tvm.ir.transform.Pass:
-    """Bind params of main function of the module to constant tensors.
+def BindParams(func_name: str, params: Dict[str, tvm.runtime.NDArray]) -> tvm.ir.transform.Pass:
+    """Bind params of function of the module to constant tensors.
 
     Parameters
     ----------
+
+    func_name: str
+        The function name to be bound
+
     params : dict from str to ndarray
         The map from param name to constant tensors.
 
@@ -221,4 +215,14 @@ def BindParams(params) -> tvm.ir.transform.Pass:
     -------
     ret: tvm.ir.transform.Pass
     """
-    return _ffi_api.BindParams(params)
+    return _ffi_api.BindParams(func_name, params)
+
+
+def FoldConstant() -> tvm.ir.transform.Pass:
+    """Fold constant expressions
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+    """
+    return _ffi_api.FoldConstant()
