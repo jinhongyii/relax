@@ -42,7 +42,7 @@ void MultiLevelTilingNode::InitializeWithTuneContext(const TuneContext& context)
     if (Optional<Integer> v = context->target.value()->GetAttr<Integer>("thread_warp_size")) {
       this->thread_warp_size_ = v.value()->value;
     } else {
-      LOG(INFO) << "'thread_warp_size' is not defined in the target";
+      TVM_PY_LOG(INFO, context->logging_func) << "'thread_warp_size' is not defined in the target";
     }
   }
 }
@@ -75,53 +75,60 @@ std::vector<State> MultiLevelTilingNode::AddWriteReuse(State state) const {
     if (state.tensor_core_is_used) state = TensorCoreStore(state);
     return {std::move(state)};
   }
-  std::vector<int> levels = config.levels;
-  ReuseType req = config.req;
-  if (Optional<Array<Integer>> ann = tir::GetAnn<Array<Integer>>(
-    state.sch->GetSRef(state.block_rv), "meta_schedule.write_cache_level")) {
-    req = ReuseType::kMustReuse;
-    levels = std::vector<int>(ann.value().begin(), ann.value().end());
-  }
-  std::vector<State> results;
-  if (req == ReuseType::kMayReuse) {
-    // Case 1. If the write cache is already there, we don't need to add another.
+  // Case 1. If the write cache is already there, we don't need to add another.
+  if (config.req == ReuseType::kMayReuse) {
     Array<BlockRV> consumer_rvs = state.sch->GetConsumers(state.block_rv);
     if (consumer_rvs.size() == 1 && IsWriteCache(state.sch->GetSRef(consumer_rvs[0]))) {
+      state.write_cache = consumer_rvs[0];
+      state.write_cache_is_added = false;
       std::vector<State> results;
       results.push_back(state);
 
-      for (int level : levels) {
+      BlockRV consumer = state.write_cache.value();
+      // Enumerate the level of tile to be fused at
+      for (int level : config.levels) {
         State new_state = state;
         new_state.sch = state.sch->Copy();
         new_state.sch->Seed(state.sch->ForkSeed());
         if (new_state.tensor_core_is_used) {
           new_state = TensorCoreStore(new_state);
-        } else {
-          const LoopRV& loop_rv = new_state.tiles[level - 1].back();
-          new_state.sch->ReverseComputeAt(consumer_rvs[0], loop_rv, true);
         }
+        const LoopRV& loop_rv = new_state.tiles[level - 1].back();
+        new_state.sch->ReverseComputeAt(consumer, loop_rv, true);
         results.push_back(std::move(new_state));
       }
       return results;
-    } else {
-      // Case 2. No write cache is added
-      State new_state(/*sch=*/state.sch->Copy(), /*block_rv=*/state.block_rv);
-      new_state.sch->Seed(state.sch->ForkSeed());
-      if (new_state.tensor_core_is_used) new_state = TensorCoreStore(new_state);
-      results.emplace_back(std::move(new_state));
     }
   }
-
+  std::vector<State> results;
+  // Case 2. No write cache is added
+  if (config.req == ReuseType::kMayReuse) {
+    State new_state(/*sch=*/state.sch->Copy(), /*block_rv=*/state.block_rv,
+                    /*write_cache=*/NullOpt,
+                    /*write_cache_is_added=*/false);
+    new_state.sch->Seed(state.sch->ForkSeed());
+    if (new_state.tensor_core_is_used) new_state = TensorCoreStore(new_state);
+    results.emplace_back(std::move(new_state));
+  }
   // Case 3. Add one write cache
-  BlockRV write_cache = state.sch->CacheWrite(/*block_rv=*/state.block_rv, /*read_buffer_index=*/0,
-                                              /*storage_scope=*/config.scope);
   for (int level : config.levels) {
     State new_state = state;
     new_state.sch = state.sch->Copy();
     new_state.sch->Seed(state.sch->ForkSeed());
-    ICHECK(!new_state.tensor_core_is_used) << "not supported"; // FIXME
+    if (new_state.tensor_core_is_used) {
+      new_state = TensorCoreStore(new_state);
+    }
     const LoopRV& loop_rv = new_state.tiles[level - 1].back();
-    new_state.sch->ReverseComputeAt(write_cache, loop_rv, true);
+    BlockRV write_cache =
+        new_state.sch->WriteAt(/*loop_rv=*/loop_rv, /*block_rv=*/new_state.block_rv,
+                               /*write_buffer_index=*/0,
+                               /*storage_scope=*/config.scope);
+    new_state.write_cache = write_cache;
+    {
+      tir::Annotate(new_state.sch->state(), new_state.sch->GetSRef(write_cache),  //
+                    tir::attr::meta_schedule_cache_type,                          //
+                    Integer(tir::attr::meta_schedule_cache_type_write));
+    }
     results.push_back(std::move(new_state));
   }
   return results;
@@ -213,37 +220,37 @@ std::vector<State> MultiLevelTilingNode::AddReadReuse(State state) const {
         continue;
       }
       // Do cache_read
-      BlockRV cache_read_block;
-      if (state.tensor_core_is_used) {
-        cache_read_block = sch->ReadAt(loop_rv, block_rv, i, config.scope);
-        runtime::StorageScope scope = runtime::StorageScope::Create(config.scope);
-        Array<FloatImm> probs(3, FloatImm(DataType::Float(64), 1.0 / 3));
-        PrimExpr ann_val = sch->SampleCategorical({4, 8, 16}, probs);
-        sch->Annotate(cache_read_block, tir::attr::vector_bytes, ann_val);
-        if (scope.rank == runtime::StorageRank::kShared && add_local_stage) {
-          sch->Annotate(cache_read_block, tir::attr::local_stage, Integer(1));
-        }
-        if (scope.rank == runtime::StorageRank::kShared) {
-          sch->Annotate(cache_read_block, tir::attr::double_buffer_scope, Integer(0));
-        }
-      } else {
-        cache_read_block = sch->CacheRead(block_rv, i, config.scope);
-        // Insert cache_read block to the proper place
-        sch->ComputeAt(cache_read_block, loop_rv, true);
-        // Fuse the iterators of the cache_read
-        Array<LoopRV> buffer_loops = sch->GetLoops(cache_read_block);
-        LoopRV fused = sch->Fuse(Array<LoopRV>{buffer_loops.end() - buffer_ndim,  //
+      BlockRV cache_read_block = sch->ReadAt(loop_rv, block_rv, i, config.scope);
+      runtime::StorageScope scope = runtime::StorageScope::Create(config.scope);
+      Array<FloatImm> probs(3, FloatImm(DataType::Float(64), 1.0 / 3));
+      PrimExpr ann_val = sch->SampleCategorical({4, 8, 16}, probs);
+      sch->Annotate(cache_read_block, tir::attr::vector_bytes, ann_val);
+      if (scope.rank == runtime::StorageRank::kShared && add_local_stage) {
+        sch->Annotate(cache_read_block, tir::attr::local_stage, Integer(1));
+      }
+      if (scope.rank == runtime::StorageRank::kShared) {
+        sch->Annotate(cache_read_block, tir::attr::double_buffer_scope, Integer(0));
+      }
+      {
+        tir::Annotate(sch->state(), sch->GetSRef(cache_read_block),  //
+                      tir::attr::meta_schedule_cache_type,
+                      Integer(tir::attr::meta_schedule_cache_type_read));
+      }
+      // Insert cache_read block to the proper place
+      sch->ComputeAt(cache_read_block, loop_rv, true);
+      // Fuse the iterators of the cache_read
+      Array<LoopRV> buffer_loops = sch->GetLoops(cache_read_block);
+      LoopRV fused = sch->Fuse(Array<LoopRV>{buffer_loops.end() - buffer_ndim,  //
                                              buffer_loops.end()});
-        // Annotate cooperative fetching
-        if (!vector_load_lens.empty()) {
-          int n = vector_load_lens.size();
-          double prob = 1.0 / n;
-          tir::ExprRV vector_load_len =
-              sch->SampleCategorical(support::AsArray<int, Integer>(vector_load_lens),
-                                     Array<FloatImm>(n, FloatImm(DataType::Float(64), prob)));
-          sch->Annotate(cache_read_block, tir::attr::meta_schedule_cooperative_fetch,
-                        vector_load_len);
-        }
+      // Annotate cooperative fetching
+      if (!vector_load_lens.empty()) {
+        int n = vector_load_lens.size();
+        double prob = 1.0 / n;
+        tir::ExprRV vector_load_len =
+            sch->SampleCategorical(support::AsArray<int, Integer>(vector_load_lens),
+                                   Array<FloatImm>(n, FloatImm(DataType::Float(64), prob)));
+        sch->Annotate(cache_read_block, tir::attr::meta_schedule_cooperative_fetch,
+                      vector_load_len);
       }
     }
     State new_state = state;
@@ -255,7 +262,7 @@ std::vector<State> MultiLevelTilingNode::AddReadReuse(State state) const {
     Array<Integer> order;
     if (tir::IsCacheReadSharedPattern(loop)) {
       stage = {0, 0, 0, 0, 0, 1, 1};
-      order = {0, 3, 1, 4, 5, 2, 6};
+      order = {0, 1, 3, 4, 5, 2, 6};
     } else {
       tir::FallbackRule(loop, &stage, &order);
     }
@@ -290,11 +297,12 @@ ScheduleRule ScheduleRule::MultiLevelTiling(String structure, Optional<Array<Str
 }
 
 Optional<LoopRV> MultiLevelTilingNode::TransformWithTensorIntrin(State& state, const String& intrin_name) const {
+  // Optional<tir::TensorizeInfo> opt_tensorize_info = GetTensorizeLoopMapping(
+  //     sch->state(), sch->GetSRef(block_rv), tir::TensorIntrin::Get(intrin_name)->desc);
   BlockRV block_rv = state.block_rv;
   Optional<tir::LayoutInfo> opt_layout_info =
       GetTensorizeLayoutInfo(state.sch->state(), state.sch->GetSRef(block_rv),
                              tir::TensorIntrin::Get(intrin_name)->desc);
-  ICHECK(opt_layout_info.defined());
   if (!opt_layout_info) return NullOpt;
   const tir::LayoutInfoNode* info = opt_layout_info.value().get();
 
@@ -308,63 +316,62 @@ Optional<LoopRV> MultiLevelTilingNode::TransformWithTensorIntrin(State& state, c
   for (size_t i = 0; i < block->writes.size(); ++i) {
     buffers[block->writes[i]->buffer] = std::move(std::make_pair(i, false));
   }
-  // Reindex buffers and insert reindex stage
+
   state.tensor_core_reindex_store = state.sch->ReIndex(block_rv, 0, true);
   state.tensor_core_reindex_A = state.sch->ReIndex(block_rv, 0, false);
   state.tensor_core_reindex_B = state.sch->ReIndex(block_rv, 1, false);
-  block_sref = state.sch->GetSRef(state.block_rv);
-  block = TVM_SREF_TO_BLOCK(block, block_sref);
+  state.sch->TransformBlockLayout(state.tensor_core_reindex_store.value(), info->mapping);
+  state.sch->TransformBlockLayout(state.tensor_core_reindex_A.value(), info->mapping);
+  state.sch->TransformBlockLayout(state.tensor_core_reindex_B.value(), info->mapping);
+  state.sch->TransformBlockLayout(state.block_rv, info->mapping);
 
-  // Transform the layout of reindex buffers accordingly
-  std::unordered_set<tir::Var, ObjectPtrHash, ObjectPtrEqual> unmapped_vars;
-  std::unordered_map<tir::Var, tir::Var, ObjectPtrHash, ObjectPtrEqual> representer_map;
-  std::unordered_map<tir::Var, PrimExpr, ObjectPtrHash, ObjectPtrEqual> tgt_iter_map;
   size_t offset = info->mapping->final_indices.size() - info->rhs_iters.size();
-  ICHECK_EQ(info->lhs_iters.size(), info->mapping->initial_indices.size());
-  for (size_t i = 0; i < info->lhs_iters.size(); ++i) {
-    representer_map[info->lhs_iters[i]->var] = info->mapping->initial_indices[i];
-  }
-  for (size_t i = 0; i < offset; ++i) {
-    const tir::VarNode* var_ptr = info->mapping->final_indices[i].as<tir::VarNode>();
-    ICHECK(var_ptr != nullptr);
-    unmapped_vars.insert(GetRef<tir::Var>(var_ptr));
-  }
+  std::unordered_map<tir::Var, PrimExpr, ObjectPtrHash, ObjectPtrEqual> tgt_iter_map;
+
   for (size_t i = offset; i < info->mapping->final_indices.size(); ++i) {
     tgt_iter_map[info->rhs_iters[i - offset]->var] = info->mapping->final_indices[i];
   }
+
   for (const auto& it : buffers) {
     // organize the mappings for buffer layout transformation
     const tir::Buffer& rhs_buffer = info->lhs_buffer_map[it.first];
-    std::vector<tir::Var> sub_representers;
-    std::vector<PrimExpr> sub_target_iters;
-    // Refresh block sref and handler
-    block_sref = state.sch->GetSRef(state.block_rv);
-    block = TVM_SREF_TO_BLOCK(block, block_sref);
-    const tir::BufferRegion& region = it.second.second ? block->reads[it.second.first] : block->writes[it.second.first];
-    for (const Range& range : region->region) {
-      ICHECK(tir::is_one(range->extent));
-      const tir::VarNode* var_ptr = range->min.as<tir::VarNode>();
-      ICHECK(var_ptr != nullptr);
-      const tir::Var& representer = representer_map[GetRef<tir::Var>(var_ptr)];
-      sub_representers.push_back(representer);
-      if (unmapped_vars.count(representer)) {
-        sub_target_iters.push_back(representer);
+    std::vector<tir::Var> new_representers;
+    std::vector<PrimExpr> new_tgt_iters;
+    std::unordered_set<tir::Var, ObjectPtrHash, ObjectPtrEqual> covered;
+    auto collect = [&](const ObjectRef& obj) -> bool {
+      if (const tir::VarNode* var = obj.as<tir::VarNode>()) {
+        covered.insert(GetRef<tir::Var>(var));
+      }
+      return true;
+    };
+    // new target iters
+    for (const PrimExpr& index : info->lhs_indices_map[it.first]) {
+      tir::PreOrderVisit(index, collect);
+    }
+    for (size_t i = 0; i < offset; ++i) {
+      if (covered.count(info->lhs_iters[i]->var)) {
+        covered.insert(info->mapping->initial_indices[i]);
+        new_tgt_iters.push_back(info->mapping->final_indices[i]);
       }
     }
     for (size_t i = 0; i < info->rhs_indices_map[rhs_buffer].size(); ++i) {
       const tir::VarNode* var = info->rhs_indices_map[rhs_buffer][i].as<tir::VarNode>();
       ICHECK(var != nullptr);
-      sub_target_iters.push_back(tgt_iter_map[GetRef<tir::Var>(var)]);
+      new_tgt_iters.push_back(tgt_iter_map[GetRef<tir::Var>(var)]);
+      tir::PreOrderVisit(new_tgt_iters.back(), collect);
     }
+    // new representers
+    for (const auto& representer : info->mapping->initial_indices) {
+      if (covered.count(representer)) {
+        new_representers.push_back(representer);
+      }
+    }
+    LOG(INFO) << "TransformaLayout " << it.second.first << it.first << " " << rhs_buffer;
     state.sch->TransformLayout(state.block_rv, it.second.first,
                                it.second.second ? tir::BufferIndexType::kRead : tir::BufferIndexType::kWrite,
-                               tir::IndexMap(sub_representers, sub_target_iters));
+                               tir::IndexMap(new_representers, new_tgt_iters));
+    LOG(INFO) << "OK";
   }
-  // Transform the layout of current block and reindex blocks
-  state.sch->TransformBlockLayout(state.tensor_core_reindex_store.value(), info->mapping);
-  state.sch->TransformBlockLayout(state.tensor_core_reindex_A.value(), info->mapping);
-  state.sch->TransformBlockLayout(state.tensor_core_reindex_B.value(), info->mapping);
-  state.sch->TransformBlockLayout(state.block_rv, info->mapping);
 
   Array<LoopRV> loops = state.sch->GetLoops(state.block_rv);
   return loops[loops.size() - info->rhs_iters.size()];
@@ -428,7 +435,6 @@ inline std::vector<State> MultiLevelTilingNode::SeekForTensorCore(State state) c
   if (!use_tensor_core) return {state};
   // Do block & buffer layout transform to match Tensor Core wmma sync intrin
   Optional<LoopRV> transformed_loop_rv = TransformWithTensorIntrin(state, "wmma_sync");
-  ICHECK(transformed_loop_rv.defined());
   if (!transformed_loop_rv.defined()) return {state};
   // Do tiling to match Tensor Core wmma sync intrin
   BlockRV block_rv = state.block_rv;

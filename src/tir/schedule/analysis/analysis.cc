@@ -1167,7 +1167,7 @@ class MappingProposer {
   }
 
   void CollectFeasibleSet() {
-    std::unordered_map<Buffer, VarSet, ObjectPtrHash, ObjectPtrEqual> 
+    std::unordered_map<Buffer, VarSet, ObjectPtrHash, ObjectPtrEqual>
       lhs_buffer_var_map, rhs_buffer_var_map;
     for (const auto& it : extractor_->rhs_buffer_indices_map_) {
       VarSet lhs_vars, rhs_vars;
@@ -1305,17 +1305,95 @@ Optional<LayoutInfo> GetTensorizeLayoutInfo(const tir::ScheduleState& self,
     return NullOpt;
   }
   proposer.Propose();
-  if (proposer.mappings_.empty()) {
+  // Step 3. Extract the loops on top of the block. It is a mirror step of Step 1
+  std::vector<const tir::ForNode*> block_loops;
+  std::unordered_set<const tir::VarNode*> block_loop_vars;
+  {
+    for (const tir::StmtSRefNode* loop_sref = block_sref->parent;; loop_sref = loop_sref->parent) {
+      const auto* loop = loop_sref->StmtAs<tir::ForNode>();
+      if (loop == nullptr || loop->body->IsInstance<tir::SeqStmtNode>()) {
+        break;
+      }
+      block_loops.push_back(loop);
+      block_loop_vars.insert(loop->loop_var.get());
+      if (!analyzer.CanProve(loop->min == 0)) {
+        return NullOpt;
+      }
+    }
+    std::reverse(block_loops.begin(), block_loops.end());
+  }
+  // Step 4. Map from block loops to desc block loops
+  ObjectPtr<TensorizeInfoNode> ret = make_object<TensorizeInfoNode>();
+  int n_block_vars = block->iter_values.size();
+  int n_desc_vars = desc_block->iter_values.size();
+  int offset = n_block_vars - n_desc_vars;
+  if (offset < 0) {
     return NullOpt;
   }
-  ObjectPtr<LayoutInfoNode> ret = make_object<LayoutInfoNode>();
-  // Only using 1 layout now
-  ret->mapping = std::move(proposer.mappings_[0]);
-  ret->lhs_buffer_map = std::move(proposer.lhs_buffer_map_);
-  ret->rhs_indices_map = std::move(extractor.rhs_buffer_indices_map_);
-  ret->lhs_iters = std::move(extractor.lhs_iters_);
-  ret->rhs_iters = std::move(extractor.rhs_iters_);
-  return LayoutInfo(ret);
+  // We align the block and desc block's bindings from the right side
+  // block     (v0=..., v1=..., v2=...)
+  //                    ^ i_block
+  // desc_block(        v1=..., v2=...)
+  //                    ^ i_desc
+  for (int i_desc = 0, i_block = offset; i_desc < n_desc_vars; ++i_desc, ++i_block) {
+    // For each block var binding, we find
+    const PrimExpr& block_bind = block->iter_values[i_block];
+    const PrimExpr& desc_bind = desc_block->iter_values[i_desc];
+    // Step 4.1. Find the corresponding loop of the i-th block var of block
+    const tir::ForNode* block_loop = nullptr;
+    for (int i = 0, n = block_loops.size(); i < n; ++i) {
+      // Check if block_bind = block_loops[i]->loop_var + stuff-irrelevant-of-loop-vars
+      PrimExpr r = analyzer.Simplify(block_bind - block_loops[i]->loop_var);
+      if (!UsesVar(r,
+                   [&block_loop_vars](const VarNode* var) { return block_loop_vars.count(var); })) {
+        block_loop = block_loops[i];
+        break;
+      }
+    }
+    if (block_loop == nullptr) {
+      return NullOpt;
+    }
+    // Step 4.2. Find the corresponding loop of the i-th block var of desc
+    const tir::ForNode* desc_loop = nullptr;
+    for (int i = 0, n = desc_loops.size(); i < n; ++i) {
+      // Check if desc_bind = loops[i]->loop_var + stuff-irrelevant-of-loop-vars
+      PrimExpr r = analyzer.Simplify(desc_bind - desc_loops[i]->loop_var);
+      if (!UsesVar(r,
+                   [&desc_loop_vars](const VarNode* var) { return desc_loop_vars.count(var); })) {
+        desc_loop = desc_loops[i];
+        break;
+      }
+    }
+    if (block_loop == nullptr) {
+      return NullOpt;
+    }
+    // Step 4.3. Check divisibility of loop extents
+    PrimExpr block_extent = analyzer.Simplify(block_loop->extent);
+    PrimExpr desc_extent = analyzer.Simplify(desc_loop->extent);
+    if (const auto* int_block_extent = block_extent.as<IntImmNode>()) {
+      if (const auto* int_desc_extent = desc_extent.as<IntImmNode>()) {
+        if (int_block_extent->value % int_desc_extent->value != 0) {
+          return NullOpt;
+        }
+      } else {
+        return NullOpt;
+      }
+    } else {
+      return NullOpt;
+    }
+    // Step 4.4. Maps the result of Step 4.1 to Step 4.2
+    const tir::StmtSRef& block_loop_sref = self->stmt2ref[block_loop];
+    auto it = ret->loop_map.find(block_loop_sref);
+    if (it == ret->loop_map.end()) {
+      ret->loop_map.Set(block_loop_sref, GetRef<tir::For>(desc_loop));
+    } else if ((*it).second.get() != desc_loop) {
+      return NullOpt;
+    }
+  }
+  for (int i = 0, n = desc_loops.size(); i < n; ++i) {
+    ret->desc_loop_indexer.Set(GetRef<tir::For>(desc_loops[i]), Integer(i));
+  }
+  return TensorizeInfo(ret);
 }
 
 TVM_REGISTER_NODE_TYPE(LayoutInfoNode);
