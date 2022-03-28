@@ -157,11 +157,14 @@ TVM_DLL Pass FoldConstant();
 TVM_DLL Pass FuseOps(int fuse_opt_level = -1);
 
 /*!
- * \brief Bind params of main function of the module to constant tensors.
+ * \brief Bind params of function of the module to constant tensors.
+ *
+ * \param func_name The name of the function to bind parameters.
+ * \param params The parameters to bind.
  *
  * \return The Pass.
  */
- TVM_DLL Pass BindParams(Map<String, runtime::NDArray> params);
+TVM_DLL Pass BindParams(String name, Map<String, runtime::NDArray> params);
 
 }  // namespace transform
 }  // namespace relax
