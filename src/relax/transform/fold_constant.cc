@@ -18,100 +18,147 @@
  */
 
 #include <tvm/driver/driver_api.h>
+#include <tvm/ir/function.h>
 #include <tvm/relax/attrs/memory.h>
 #include <tvm/relax/expr_functor.h>
 #include <tvm/relax/transform.h>
 #include <tvm/relax/type.h>
-#include <tvm/relay/interpreter.h>
+#include <tvm/tir/function.h>
 #include <tvm/tir/op.h>
 
 namespace tvm {
 namespace relax {
 
-/*!
- * \brief Returns whether \p expr is a literal \p Constant,
- */
-bool IsSimpleConstant(const Expr& expr) { return expr->IsInstance<relay::ConstantNode>(); }
-
 class ConstantFolder : public ExprMutator {
-  Expr ConstEvaluateTIR(GlobalVar tir_f_var, const Array<Expr>& args, ShapeExpr shape) {
-    auto tir_f = module_->functions.Get(tir_f_var).value();
-    runtime::Module module;
-    if (func_build_cache_.count(tir_f)) {
-      module = func_build_cache_.Get(tir_f).value();
+ public:
+  ConstantFolder(IRModule ctx_module) : ctx_module_(ctx_module) {}
+
+ private:
+  /*!
+   * \brief Pattern match expr to a constant shape and get runtime shape tuple from it.
+   * \return The runtime shape tuple, or nullopt if it is not a constant shape.
+   */
+  static Optional<runtime::ShapeTuple> MatchConstShape(const Expr& expr) {
+    if (auto* shape = expr.as<ShapeExprNode>()) {
+      std::vector<int64_t> shape_values;
+      for (const auto v : shape->values) {
+        if (auto* ptr = v.as<IntImmNode>()) {
+          shape_values.push_back(ptr->value);
+        } else {
+          return NullOpt;
+        }
+      }
+      return runtime::ShapeTuple(shape_values.begin(), shape_values.end());
     } else {
-      module = build(LowerPrimFunc(Downcast<tir::PrimFunc>(tir_f), "tir_function"),
-                     eval_cpu_target_, eval_cpu_target_);
-      func_build_cache_.Set(tir_f, module);
+      return NullOpt;
     }
-    TVMRetValue ret;
-
-    //    Array<ObjectRef> args_for_tir = {args.begin(), args.end()};
-    std::vector<runtime::NDArray> args_for_tir;
-    for (auto arg : args) {
-      args_for_tir.push_back(Downcast<relay::Constant>(arg)->data);
-    }
-
-    int kArraySize = args_for_tir.size();
-    TVMValue values[kArraySize + 1];
-    int type_codes[kArraySize + 1];
-
-    DLDevice dev = {DLDeviceType::kDLCPU, 0};
-    std::vector<int64_t> shape_values;
-    for (const auto v : shape->values) {
-      shape_values.push_back(v.as<IntImmNode>()->value);
-    }
-
-    runtime::ShapeTuple shape_tuple{shape_values.begin(), shape_values.end()};
-    auto ret_tensor = runtime::NDArray::Empty(shape_tuple, DataType::Float(32), dev);
-    args_for_tir.push_back(ret_tensor);
-    for (int i = 0; i < static_cast<int>(args_for_tir.size()); i++) {
-      runtime::TVMArgsSetter(values, type_codes)(i, args_for_tir[i]);
-    }
-    module.GetFunction("tir_function")
-        .CallPacked(TVMArgs(values, type_codes, args_for_tir.size()), &ret);
-    return Constant(Downcast<runtime::NDArray>(ObjectRef(ret_tensor)));
   }
 
- public:
-  ConstantFolder(IRModule module) : module_(module) {}
-
-  Expr ForwardBinding(Expr e) {
-    if (const auto* v = e.as<VarNode>()) {
-      // check that the var is not the input param, otherwise the function will crash
-      if (visited_varbinding.count(v)) {
-        return LookupBinding(GetRef<Var>(v));
+  /*!
+   * \brief Pattern match op to constant array arguments.
+   * \return The constant array arguments, or nullopt if match fails.o
+   */
+  static Optional<Array<runtime::NDArray>> MatchConstArrayArgs(const Array<Expr>& args) {
+    Array<runtime::NDArray> res;
+    for (auto arg : args) {
+      if (auto* ptr = arg.as<relay::ConstantNode>()) {
+        res.push_back(ptr->data);
+      } else {
+        return NullOpt;
       }
     }
-    return e;
+    return res;
+  }
+
+  /*!
+   * \brief Pattern match op to a TIR function and look it up.
+   * \return The TIR function, or nullopt if patter match fails.
+   */
+  Optional<tir::PrimFunc> MatchPrimFunc(const Expr& op) {
+    if (auto* ptr = op.as<GlobalVarNode>()) {
+      // NOTE: as check works for nullptr(returns null)
+      Optional<BaseFunc> base_func = ctx_module_->functions.Get(GetRef<GlobalVar>(ptr));
+      if (auto* pfunc = base_func.as<tir::PrimFuncNode>()) {
+        return GetRef<tir::PrimFunc>(pfunc);
+      }
+    }
+    return NullOpt;
+  }
+
+  /*!
+   * \brief Get a cached build version of func
+   * \return The cached func, nullopt if func cannot be built.
+   */
+  Optional<PackedFunc> GetCachedBuild(tir::PrimFunc func) {
+    // TODO(tvm-team): consider another way of bulk extract and build PrimFunc once
+    // would be helpful for future cases where PrimFunc recursively call into each other
+    Target eval_cpu_target{"llvm"};
+
+    auto it = func_build_cache_.find(func);
+    if (it != func_build_cache_.end()) {
+      return it->second;
+    }
+    Optional<PackedFunc> build_func = NullOpt;
+
+    try {
+      runtime::Module rt_module =
+          build(LowerPrimFunc(func, "tir_function"), eval_cpu_target, eval_cpu_target);
+      build_func = rt_module.GetFunction("tir_function");
+    } catch (const tvm::Error& err) {
+      // build failure may happen in which case we skip
+      DLOG(WARNING) << "Build failure for function " << func;
+    }
+    func_build_cache_[func] = build_func;
+    return build_func;
+  }
+
+  // Try constant evaluate the function call
+  // if failed return NullOpt
+  Optional<Expr> ConstEvaluateCallTIR(tir::PrimFunc tir_func, Array<runtime::NDArray> arr_args,
+                                      runtime::ShapeTuple shape) {
+    // obtain function from the cache.
+    Optional<PackedFunc> func = GetCachedBuild(tir_func);
+    if (!func) return NullOpt;
+
+    std::vector<TVMValue> values(arr_args.size() + 1);
+    std::vector<int> type_codes(arr_args.size() + 1);
+
+    DLDevice cpu_dev = {DLDeviceType::kDLCPU, 0};
+    runtime::NDArray ret_tensor = runtime::NDArray::Empty(shape, DataType::Float(32), cpu_dev);
+
+    // avoid set rvalue ref which get de-allocated later, store args in a vector
+    // where temp_args[i] are lvalue ref that is stable
+    std::vector<runtime::NDArray> temp_args(arr_args.begin(), arr_args.end());
+
+    size_t arg_offset = 0;
+    for (; arg_offset < arr_args.size(); ++arg_offset) {
+      runtime::TVMArgsSetter(values.data(), type_codes.data())(arg_offset, temp_args[arg_offset]);
+    }
+    // set return value
+    runtime::TVMArgsSetter(values.data(), type_codes.data())(arg_offset++, ret_tensor);
+
+    TVMRetValue ret;
+    // invoke
+    func.value().CallPacked(TVMArgs(values.data(), type_codes.data(), values.size()), &ret);
+    return Constant(ret_tensor);
   }
 
   Expr VisitCallTIR(Call call) {
-    Array<Expr> args;
-    Expr op = call->op;
-    if (call->args[1].as<TupleNode>()) {
-      args = Downcast<Tuple>(call->args[1])->fields;
-    } else {
-      args.push_back(call->args[1]);
+    // call_tir needs to have at least three arguments
+    ICHECK_GE(call->args.size(), 3);
+    Optional<tir::PrimFunc> func = MatchPrimFunc(call->args[0]);
+    ICHECK(call->args[1].as<TupleNode>()) << "call_tir.args[1] requires to be Tuple";
+    Optional<Array<runtime::NDArray>> arr_args =
+        MatchConstArrayArgs(call->args[1].as<TupleNode>()->fields);
+    Optional<runtime::ShapeTuple> shape = MatchConstShape(call->args[2]);
+
+    // Pattern 0: call constant function, const argument with const shape.
+    if (func && arr_args && shape) {
+      // value_or will return value if it is not null, otherwise return or
+      return ConstEvaluateCallTIR(func.value(), arr_args.value(), shape.value()).value_or(call);
     }
-    op = call->args[0];
-    Array<Expr> processed_args;
-    for (const auto& e : args) {
-      processed_args.push_back(ForwardBinding(e));
-    }
-    if (!std::all_of(processed_args.begin(), processed_args.end(), IsSimpleConstant)) {
-      // At least one non-constant argument.
-      return std::move(call);
-    }
-    // During evaluation we have obviously lost all on_device annotations. However any
-    // on_device wrapping this call will be left in place.
-    try {
-      auto fold_result = ConstEvaluateTIR(Downcast<GlobalVar>(op), processed_args,
-                                          Downcast<ShapeExpr>(call->args[2]));
-      return fold_result;
-    } catch (tvm::Error& error) {
-      return std::move(call);
-    }
+    // TODO(hongyi): support const-fold tuple outputs
+    return std::move(call);
   }
 
   Expr VisitExpr_(const CallNode* call) override {
@@ -126,51 +173,42 @@ class ConstantFolder : public ExprMutator {
     }
   }
 
-  void VisitBinding_(const VarBindingNode* binding) final {
-    visited_varbinding.insert(binding->var.get());
-    ExprMutator::VisitBinding_(binding);
-  }
-
   Expr VisitExpr_(const DataflowVarNode* op) final {
-    Var post_visit = Downcast<Var>(VisitExprPostOrder_(op));
-    if (visited_varbinding.count(op)) {
-      Expr expr = LookupBinding(GetRef<Var>(op));
-      if (expr->IsInstance<relay::ConstantNode>()) {
-        return expr;
-      }
+    Optional<Expr> opt = LookupBinding(GetRef<Var>(op));
+    // NOTE: opt can be nullptr, in which case opt is nullptr
+    // as check checks if opt is not null and is instance of constant
+    if (opt.as<relay::ConstantNode>()) {
+      return opt.value();
+    } else {
+      return ExprMutator::VisitExpr_(op);
     }
-    return post_visit;
   }
-  
+
   Expr VisitExpr_(const VarNode* op) final {
-    Var post_visit = Downcast<Var>(VisitExprPostOrder_(op));
-    if (visited_varbinding.count(op)) {
-      Expr expr = LookupBinding(GetRef<Var>(op));
-      if (expr->IsInstance<relay::ConstantNode>()) {
-        return expr;
-      }
+    Optional<Expr> opt = LookupBinding(GetRef<Var>(op));
+    // NOTE: opt can be nullptr, in which case opt is nullptr
+    // as check checks if opt is not null and is instance of constant
+    if (opt.as<relay::ConstantNode>()) {
+      return opt.value();
+    } else {
+      return ExprMutator::VisitExpr_(op);
     }
-    return post_visit;
   }
 
-  IRModule module_;
-  Target eval_cpu_target_{"llvm"};
-  Device eval_cpu_dev_{kDLCPU, /*device_id=*/0};
-  std::unordered_set<const VarNode*> visited_varbinding;
-  Map<BaseFunc, runtime::Module> func_build_cache_;
+  // the context module to lookup functions
+  IRModule ctx_module_;
+  // cache for function build, via structural equality
+  std::unordered_map<tir::PrimFunc, Optional<runtime::PackedFunc>, StructuralHash, StructuralEqual>
+      func_build_cache_;
 };
-
-Expr FoldConstant(const IRModule& m, const Expr& e) {
-  Expr expr = ConstantFolder(m).VisitExpr(e);
-  return expr;
-}
 
 namespace transform {
 
 Pass FoldConstant() {
   runtime::TypedPackedFunc<Function(Function, IRModule, PassContext)> pass_func =
       [=](Function f, IRModule m, PassContext pc) {
-        return Downcast<Function>(FoldConstant(m, f));
+        ConstantFolder folder(m);
+        return Downcast<Function>(folder(f));
       };
   return CreateFunctionPass(pass_func, 0, "FoldConstant", {});
 }

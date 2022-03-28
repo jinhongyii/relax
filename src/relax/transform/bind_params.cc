@@ -34,7 +34,6 @@ namespace relax {
 class ExprBinder : public ExprMutator {
  public:
   explicit ExprBinder(const tvm::Map<Var, Expr>& args_map) : args_map_(args_map) {}
-  
 
   Expr VisitExpr_(const VarNode* op) final {
     auto id = GetRef<Var>(op);
@@ -45,7 +44,7 @@ class ExprBinder : public ExprMutator {
       return ExprMutator::VisitExpr_(op);
     }
   }
-  
+
  private:
   const tvm::Map<Var, Expr>& args_map_;
 };
@@ -108,12 +107,12 @@ inline Function BindParamsByName(Function func,
   return ret;
 }
 
-IRModule BindParam(IRModule m, Map<String, runtime::NDArray> param) {
+IRModule BindParam(IRModule m, String func_name, Map<String, runtime::NDArray> param) {
   IRModuleNode* new_module = m.CopyOnWrite();
   Map<GlobalVar, BaseFunc> functions = m->functions;
   for (const auto& func_pr : functions) {
     if (const auto* relax_f = func_pr.second.as<FunctionNode>()) {
-      if (relax_f->name.value()->name_hint == "main") {
+      if (relax_f->name.value()->name_hint == func_name) {
         Function f_after_bind = BindParamsByName(GetRef<Function>(relax_f),
                                                  param);
         new_module->Update(func_pr.first, f_after_bind);
@@ -125,11 +124,9 @@ IRModule BindParam(IRModule m, Map<String, runtime::NDArray> param) {
 
 namespace transform {
 
-Pass BindParams(Map<String, runtime::NDArray> params) {
+Pass BindParams(String func_name, Map<String, runtime::NDArray> params) {
   runtime::TypedPackedFunc<IRModule(IRModule, PassContext)> pass_func =
-      [=](IRModule mod, PassContext pc) {
-        return BindParam(std::move(mod), params);
-      };
+      [=](IRModule mod, PassContext pc) { return BindParam(std::move(mod), func_name, params); };
   return CreateModulePass(pass_func, 0, "BindParams", {});
 }
 
