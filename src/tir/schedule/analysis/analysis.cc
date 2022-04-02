@@ -2053,22 +2053,28 @@ bool CheckElemwisePattern(const Array<PrimExpr>& indices_l, const Array<PrimExpr
   return true;
 }
 
-bool CheckBroadcastPattern(const Array<PrimExpr>& indices_l, const Array<PrimExpr>& indices_r){
-  if (indices_l.size() < indices_r.size()) {
-    return false;
-  }
-  int j=0;
-  for (int i = 0; i < static_cast<int>(indices_r.size()); i++) {
-    for (; j < static_cast<int>(indices_l.size()) && !indices_l[j].same_as
-                                                           (indices_r[i]); j++);
-    if(j==static_cast<int>(indices_l.size())){
+bool CheckBroadcastPattern(const Array<PrimExpr>& store_indices, const BufferLoad& buffer_load) {
+  int j = 0;
+  const Buffer& loaded_buf = buffer_load->buffer;
+  int ndim_loaded_buf = loaded_buf->shape.size();
+  int ndim_stored_buf = store_indices.size();
+
+  for (int i = 0; i < ndim_loaded_buf; ++i) {
+    if (is_const_int(loaded_buf->shape[i], 1) && is_const_int(buffer_load->indices[i], 0)) {
+      continue;
+    }
+
+    while (j < ndim_stored_buf && !store_indices[j].same_as(buffer_load->indices[i])) {
+      ++j;
+    }
+    if (j == ndim_stored_buf) {
       return false;
     }
   }
   return true;
 }
 
-bool CheckInjectivePattern(const Array<PrimExpr>& indices_l, const Array<PrimExpr>& indices_r){
+bool CheckInjectivePattern(const Array<PrimExpr>& indices_l, const Array<PrimExpr>& indices_r) {
   std::unordered_set<const VarNode*> vars;
   for (int i = 0; i < static_cast<int>(indices_l.size()); i++) {
     if (const auto* v = indices_l[i].as<VarNode>()) {
@@ -2078,8 +2084,7 @@ bool CheckInjectivePattern(const Array<PrimExpr>& indices_l, const Array<PrimExp
     }
   }
   for (int i = 0; i < static_cast<int>(indices_r.size()); i++) {
-    if (tir::UsesVar(indices_r[i],
-                     [&vars](const VarNode* var) { return !vars.count(var); })) {
+    if (tir::UsesVar(indices_r[i], [&vars](const VarNode* var) { return !vars.count(var); })) {
       return false;
     }
   }
@@ -2096,9 +2101,9 @@ bool CheckAllowReusePattern(const Array<PrimExpr>& indices_l, const Array<PrimEx
     }
   }
   for (const PrimExpr& e : indices_r) {
-    PreOrderVisit(e, [&](const ObjectRef& node){
+    PreOrderVisit(e, [&](const ObjectRef& node) {
       if (const auto* v = node.as<VarNode>()) {
-        if(vars.count(v)) {
+        if (vars.count(v)) {
           vars.erase(v);
         }
       }
@@ -2112,9 +2117,9 @@ bool CheckFMA(Stmt body) {
   if (const auto* store = body.as<BufferStoreNode>()) {
     if (const auto* add = store->value.as<AddNode>()) {
       if (const auto* l = add->a.as<BufferLoadNode>()) {
-        if(const auto* r = add->b.as<MulNode>()) {
-          bool incremental = store->buffer.same_as(l->buffer) && CheckSameArray(store->indices,
-                                                                                l->indices);
+        if (const auto* r = add->b.as<MulNode>()) {
+          bool incremental =
+              store->buffer.same_as(l->buffer) && CheckSameArray(store->indices, l->indices);
           const auto* l_operand = r->a.as<BufferLoadNode>();
           const auto* r_operand = r->b.as<BufferLoadNode>();
           if (incremental && l_operand && r_operand) {
@@ -2127,36 +2132,39 @@ bool CheckFMA(Stmt body) {
   }
   return false;
 }
-class PatternKindAnalyzer: public StmtExprVisitor {
+
+class PatternKindAnalyzer : public StmtExprVisitor {
   void VisitStmt_(const BufferStoreNode* op) final {
-    store_indices_ = op->indices;
+    store_ = GetRef<BufferStore>(op);
     StmtVisitor::VisitStmt_(op);
   }
+
   void VisitExpr_(const BufferLoadNode* op) final {
-    load_indices_.push_back(op->indices);
+    if (op->indices.size() > 0) {
+      loads_.push_back(GetRef<BufferLoad>(op));
+    }
     ExprVisitor::VisitExpr_(op);
   }
-  
-  void VisitStmt_(const BlockNode* op)final {
+
+  void VisitStmt_(const BlockNode* op) final {
     if (op->name_hint == "root") {
       StmtVisitor::VisitStmt(op->body);
       return;
     }
-    
-    load_indices_.clear();
-    store_indices_.clear();
+
+    loads_.clear();
     StmtVisitor::VisitStmt(op->body);
-    
+
     relay::OpPatternKind index_pair_pattern = relay::kElemWise;
-    if (load_indices_.empty()) {
+    if (loads_.empty()) {
       index_pair_pattern = relay::kBroadcast;
     } else {
-      for (int i = 0; i < static_cast<int>(load_indices_.size()); i++) {
-        if (CheckElemwisePattern(store_indices_, load_indices_[i])) {
+      for (int i = 0; i < static_cast<int>(loads_.size()); ++i) {
+        if (CheckElemwisePattern(store_->indices, loads_[i]->indices)) {
           index_pair_pattern = std::max(index_pair_pattern, relay::kElemWise);
-        } else if (CheckBroadcastPattern(store_indices_, load_indices_[i])) {
+        } else if (CheckBroadcastPattern(store_->indices, loads_[i])) {
           index_pair_pattern = std::max(index_pair_pattern, relay::kBroadcast);
-        } else if (CheckInjectivePattern(store_indices_, load_indices_[i])) {
+        } else if (CheckInjectivePattern(store_->indices, loads_[i]->indices)) {
           index_pair_pattern = std::max(index_pair_pattern, relay::kInjective);
         } else {
           index_pair_pattern = relay::kOpaque;
@@ -2171,7 +2179,7 @@ class PatternKindAnalyzer: public StmtExprVisitor {
     bool has_reduction = false;
     for (IterVar it : op->iter_vars) {
       if (it->iter_type == kCommReduce) {
-        has_reduction =true;
+        has_reduction = true;
         break;
       }
     }
@@ -2184,20 +2192,17 @@ class PatternKindAnalyzer: public StmtExprVisitor {
     } else {
       kind_ = relay::kOpaque;
     }
-
   }
-  
-  Array<PrimExpr> store_indices_;
-  Array<Array<PrimExpr>> load_indices_;
-  relay::OpPatternKind kind_ =relay::kElemWise;
+
+  BufferStore store_;
+  Array<BufferLoad> loads_;
+  relay::OpPatternKind kind_ = relay::kElemWise;
 
  public:
-  relay::OpPatternKind GetResult() {
-    return kind_;
-  }
+  relay::OpPatternKind GetResult() { return kind_; }
 };
 
-relay::OpPatternKind AnalyzeOpPatternKind(const PrimFunc& func){
+relay::OpPatternKind AnalyzeOpPatternKind(const PrimFunc& func) {
   PatternKindAnalyzer analyzer;
   analyzer(func->body);
   return analyzer.GetResult();
