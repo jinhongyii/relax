@@ -117,7 +117,6 @@ class GraphCreator : public ExprVisitor {
   void VisitExpr_(const FunctionNode* func) final {
     for (const Var& param : func->params) {
       IndexedForwardGraph::Node* param_node = CreateNode(param.get());
-      LOG(INFO) << "[2]. Create node for param " << param << ". node is " << param_node;
       // The parameter is passed in from the outside, and thus it's marked as an external reference,
       // and it's pattern is `kOpaque`.
       MarkAsExternRef(param_node);
@@ -140,8 +139,6 @@ class GraphCreator : public ExprVisitor {
     CHECK(cur_binding_var_node_ == nullptr)
         << "We are visiting a new VarBinding inside an outer binding, which is not allowed";
     cur_binding_var_node_ = CreateNode(binding->var.get());
-    LOG(INFO) << "[3]. Create node for binding var " << binding->var->name_hint() << ". node is "
-              << cur_binding_var_node_ << ", type key is " << binding->var->GetTypeKey();
 
     // If the variable is not a dataflow variable, it must be the output variable of this dataflow
     // block
@@ -221,7 +218,6 @@ class GraphCreator : public ExprVisitor {
         // is actually element-wise. And in this case we change the pattern to `kElemWise`
         // temporarily.
         if (pattern == OpPatternKind::kBroadcast && structural_equal_(call->shape_, arg->shape_)) {
-          LOG(INFO) << "[13]. Change current pattern to element-wise";
           cur_pattern_ = OpPatternKind::kElemWise;
         } else {
           cur_pattern_ = pattern;
@@ -266,7 +262,6 @@ class GraphCreator : public ExprVisitor {
     IndexedForwardGraph::Node* const_node = nullptr;
     if (it_const == graph_.node_map.end()) {
       const_node = CreateNode(constant);
-      LOG(INFO) << "[4]. Create node for constant. node is " << const_node;
       // Since we never fuse constants, the pattern of the constant is set to `kOpaque`.
       SetNodePattern(const_node, OpPatternKind::kOpaque);
       AddToPostDFSOrder(const_node, constant);
@@ -339,7 +334,6 @@ class GraphCreator : public ExprVisitor {
     ICHECK(node->ref == nullptr)
         << "The node is not supposed to be added into the post-dfs order before";
 
-    LOG(INFO) << "[6]. Add node " << node << " to post-dfs order";
     node->ref = key;
     node->index = graph_.post_dfs_order.size();
     graph_.post_dfs_order.push_back(node);
@@ -353,7 +347,6 @@ class GraphCreator : public ExprVisitor {
    */
   void AddEdge(IndexedForwardGraph::Node* start, IndexedForwardGraph::Node* end,
                OpPatternKind pattern) {
-    LOG(INFO) << "[8]. Edge: " << start << " ---> " << end << ", pattern: " << (int)pattern;
     auto* link = arena_->make<LinkNode<IndexedForwardGraph::Edge>>();
     link->value.node = end;
     link->value.pattern = pattern;
@@ -375,7 +368,6 @@ class GraphCreator : public ExprVisitor {
   void SetNodePattern(IndexedForwardGraph::Node* node, OpPatternKind pattern) {
     ICHECK(initialized_nodes_.find(node) == initialized_nodes_.end())
         << "The input node is supposed to be set pattern for only once";
-    LOG(INFO) << "[7]. Set pattern of node " << node << " to " << static_cast<int>(pattern);
     initialized_nodes_.insert(node);
     node->pattern = pattern;
   }
@@ -680,6 +672,11 @@ class OperatorFusor : public ExprMutator {
       //  - Otherwise, emit a dataflow variable.
       Var new_var{nullptr};
       Call call_to_emit = Call(gv_func_pair.first, UpdateArgs(func_info.arguments_));
+
+      // TODO: remove this later
+      call_to_emit->checked_type_ = gv_func_pair.second->checked_type_;
+      call_to_emit->shape_ = gv_func_pair.second->shape_;
+
       if (i < static_cast<int>(block->bindings.size()) - 1) {
         new_var = builder_->Emit(call_to_emit);
       } else {
@@ -776,7 +773,6 @@ class OperatorFusor : public ExprMutator {
 
       Function existing_func = (*it).second.second;
       if (structural_equal_(func, existing_func)) {
-        LOG(INFO) << "[2]. deduplicate function " << gv->name_hint;
         return std::make_pair((*it).second.first, (*it).second.second);
       }
 
@@ -811,20 +807,9 @@ IRModule FuseOps(IRModule mod, int opt_level, size_t max_fuse_depth) {
   std::vector<GraphPartitioner::Group*> groups =
       GraphPartitioner(&arena, opt_level, max_fuse_depth).Partition(graph);
 
-  LOG(INFO) << "number of groups: " << groups.size();
-  for (int i = 0; i < static_cast<int>(groups.size()); ++i) {
-    if (groups[i]->FindRoot() == groups[i]) {
-      LOG(INFO) << "group[" << i << "] has " << groups[i]->num_nodes;
-    }
-  }
-
   // Step 3. Transform the IRModule by fusing the operators in accordance with the graph partition
   // results.
   mod = OperatorFusor(mod, graph, groups).Transform();
-
-  const auto* f = runtime::Registry::Get("script.AsRelaxScript");
-  String s = (*f)(mod, false);
-  LOG(INFO) << "After FuseOps:\n" << s;
 
   // TODO(ruihang): unit tests: 1. name duplication
 
