@@ -48,7 +48,7 @@ Constant::Constant(runtime::NDArray data, Span span) {
   auto shape_tuple = data.Shape();
   Array<PrimExpr> values;
   for (size_t dim = 0; dim < shape_tuple.size(); dim++) {
-    values.push_back(IntImm(DataType::Int(64), shape_tuple[dim]));
+    values.push_back(IntImm(DataType::Int(32), shape_tuple[dim]));
   }
   n->shape_ = relax::ShapeExpr(values);
 

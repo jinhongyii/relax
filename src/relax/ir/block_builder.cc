@@ -316,6 +316,9 @@ Optional<Expr> BlockBuilderNode::InferShape(const Expr& expr) {
         return op_map[op](GetRef<Call>(call), diag_ctx_);
       }
     } else if (const auto* gv = call->op.as<GlobalVarNode>()) {
+      if (!context_mod_->ContainGlobalVar(gv->name_hint)) {
+        return Downcast<Optional<Expr>>(call->shape_);
+      }
       const BaseFunc& func = context_mod_->Lookup(GetRef<GlobalVar>(gv));
       Optional<Expr> possible_shape = Downcast<Optional<Expr>>(func->shape_);
       if (is_static_shape(possible_shape)) {
@@ -342,6 +345,9 @@ Type BlockBuilderNode::InferType(const Expr& expr) {
         return op_map[op](GetRef<Call>(call), diag_ctx_);
       }
     } else if (const auto* gv = call->op.as<GlobalVarNode>()) {
+      if (!context_mod_->ContainGlobalVar(gv->name_hint)) {
+        return call->checked_type_;
+      }
       const BaseFunc& func = context_mod_->Lookup(GetRef<GlobalVar>(gv));
       if (const auto* relax_func = func.as<FunctionNode>()) {
         return relax_func->checked_type_;
