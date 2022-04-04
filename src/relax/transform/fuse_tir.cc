@@ -268,7 +268,7 @@ class FusedTIRConstructor : public ExprVisitor {
   static tir::PrimFunc GetFusedTIR(const IRModule& mod, const BaseFunc& func) {
     FusedTIRConstructor visitor(mod);
     visitor(func);
-    return visitor.fused_tir;
+    return visitor.fused_tir_;
   }
 
  private:
@@ -513,7 +513,7 @@ class FusedTIRConstructor : public ExprVisitor {
         }
         tir::PrimFunc func = opt_f.value();
         // Regenerate all vars/buffer and blocks to avoid duplication
-        func = tir::ReGenerateDef(func);
+        func = tir::RenewDefs(func);
         // Check functions are all schedulable funcs. i.e. the body of func is root block
         CHECK(func->body->IsInstance<tir::BlockRealizeNode>())
             << "Only schedulable functions (whose body is the root block) can be fused";
@@ -540,7 +540,7 @@ class FusedTIRConstructor : public ExprVisitor {
       }
       if (!is_dataflow_var) {
         // Construct the fused func
-        fused_tir = ConstructFunc();
+        fused_tir_ = ConstructFunc();
       }
     } else if (const auto* tuple_get_item = binding->value.as<TupleGetItemNode>()) {
       ICHECK(binding->var->IsInstance<DataflowVarNode>())
@@ -560,7 +560,7 @@ class FusedTIRConstructor : public ExprVisitor {
   /*! \brief The helper info to fuse TIR primfunc */
   FuseFuncInfo func_info_;
   /*! \brief The tir function after fusion*/
-  tir::PrimFunc fused_tir;
+  tir::PrimFunc fused_tir_;
 };
 
 /*!
