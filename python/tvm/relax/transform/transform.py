@@ -207,6 +207,17 @@ def FuseOps(fuse_opt_level=-1) -> tvm.ir.transform.Pass:
     return _ffi_api.FuseOps(fuse_opt_level)
 
 
+def FuseTIR() -> tvm.ir.transform.Pass:
+    """Fuse relax sub-function into a larger TIR function if possible
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered pass for tir fusion.
+    """
+    return _ffi_api.FuseTIR()
+
+
 def BindParams(func_name: str, params: Dict[str, tvm.runtime.NDArray]) -> tvm.ir.transform.Pass:
     """Bind params of function of the module to constant tensors.
 

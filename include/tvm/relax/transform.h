@@ -171,6 +171,12 @@ TVM_DLL Pass FuseOps(int fuse_opt_level = -1);
  */
 TVM_DLL Pass BindParams(String name, Map<String, runtime::NDArray> params);
 
+/*!
+ * \brief Fuse relax sub-function into a larger TIR function if possible
+ * \return The Pass.
+ */
+TVM_DLL Pass FuseTIR();
+
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm
