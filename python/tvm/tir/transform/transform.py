@@ -806,3 +806,15 @@ def RenormalizeSplitPattern():
         The result pass
     """
     return _ffi_api.RenormalizeSplitPattern()  # type: ignore
+
+
+def PromoteDataType():
+    """Check whether a PrimFunc contains buffers with int64 shape, and if so, promote all shapes
+    and iteration ranges to int64
+
+    Returns
+    -------
+    fpass : tvm.transform.Pass
+        The result pass
+    """
+    return _ffi_api.PromoteDataType()  # type: ignore
