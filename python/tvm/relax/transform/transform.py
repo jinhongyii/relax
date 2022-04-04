@@ -189,3 +189,13 @@ def BindParams(func_name, params) -> tvm.ir.transform.Pass:
     ret: tvm.ir.transform.Pass
     """
     return _ffi_api.BindParams(func_name, params)
+
+def FuseTIR() -> tvm.ir.transform.Pass:
+    """Fuse relax sub-function into a larger TIR function if possible
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered pass for tir fusion.
+    """
+    return _ffi_api.FuseTIR()
