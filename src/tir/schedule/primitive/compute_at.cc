@@ -242,7 +242,7 @@ class ScopeReconstructor : private StmtMutator {
     for (int i = 0; i < n_iters; ++i) {
       Range iter_dom = iter_doms[i].dom.CoverRange(block_->iter_vars[i]->dom);
       if (preserve_unit_loops || !is_one(iter_dom->extent)) {
-        Var var("ax" + std::to_string(loop_vars.size()), DataType::Int(32));
+        Var var("ax" + std::to_string(loop_vars.size()), iter_dom->extent->dtype);
         loop_vars.push_back(var);
         loop_extents.push_back(iter_dom->extent);
         iter_values.push_back(iter_dom->min + var);
@@ -269,7 +269,7 @@ class ScopeReconstructor : private StmtMutator {
       const Var& loop_var = loop_vars[i];
       const PrimExpr& loop_extent = loop_extents[i];
       new_subtree = For(/*loop_var=*/loop_var,
-                        /*min=*/Integer(0),
+                        /*min=*/make_const(loop_var->dtype, 0),
                         /*extent=*/loop_extent,
                         /*ForKind=*/ForKind::kSerial,
                         /*body=*/std::move(new_subtree));
@@ -481,7 +481,8 @@ std::vector<BlockVarDomainInfo> CalculateBlockVarDomain(
     for (int i = 0; i < ndim; ++i) {
       arith::IntSet provided = provided_region[i];
       arith::IntSet required = required_region[i];
-      arith::IntSet required_bound = arith::IntSet::FromMinExtent(Integer(0), buffer->shape[i]);
+      arith::IntSet required_bound =
+          arith::IntSet::FromMinExtent(make_const(buffer->shape[i]->dtype, 0), buffer->shape[i]);
       UpdateBlockVarDomain(provided, required, required_bound, &iter_doms, analyzer);
     }
   }

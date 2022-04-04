@@ -207,6 +207,11 @@ class GraphCreator : public ExprVisitor {
       } else {
         pattern = OpPatternKind::kOpaque;
       }
+
+      if (global_var->name_hint == "max_pool2d") {
+        pattern = OpPatternKind::kOutEWiseFusable;
+      }
+
       // The pattern of the current binding variable node is set to the pattern of this operator.
       SetNodePattern(cur_binding_var_node_, pattern);
 

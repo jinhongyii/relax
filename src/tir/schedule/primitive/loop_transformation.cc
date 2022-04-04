@@ -411,10 +411,16 @@ Array<StmtSRef> Split(ScheduleState self, const StmtSRef& loop_sref,
   std::vector<Var> new_loop_vars;
   new_loop_vars.reserve(n);
   for (int i = 0; i < n; i++) {
-    const PrimExpr& factor = factors[i];
+    PrimExpr factor = factors[i];
     Var var = loop->loop_var.copy_with_suffix("_" + std::to_string(i));
     if (!is_one(factor)) substitute_value = substitute_value * factor + var;
-    analyzer.Bind(var, Range::FromMinExtent(0, factor));
+    const int64_t* int_value = as_const_int(factor);
+    if (int_value == nullptr) {
+      CHECK(factor->dtype == var->dtype);
+    } else {
+      factor = make_const(var->dtype, *int_value);
+    }
+    analyzer.Bind(var, Range::FromMinExtent(make_const(var->dtype, 0), factor));
     new_loop_vars.emplace_back(std::move(var));
   }
   Map<Block, Block> opaque_block_reuse;
@@ -435,7 +441,15 @@ Array<StmtSRef> Split(ScheduleState self, const StmtSRef& loop_sref,
   }
   // Step 4. Generate nested loops to replace the original loop and simplify the binding
   for (int i = n - 1; i >= 0; i--) {
-    new_stmt = For(new_loop_vars[i], 0, factors[i], ForKind::kSerial, new_stmt);
+    PrimExpr extent = factors[i];
+    const int64_t* int_value = as_const_int(extent);
+    const DataType& dtype = new_loop_vars[i]->dtype;
+    if (int_value == nullptr) {
+      CHECK(extent->dtype == dtype);
+    } else {
+      extent = make_const(dtype, *int_value);
+    }
+    new_stmt = For(new_loop_vars[i], make_const(dtype, 0), extent, ForKind::kSerial, new_stmt);
   }
   new_stmt = IterMapSimplifyBlockBinding::SimplifyBindings(std::move(new_stmt), GetLoops(loop_sref),
                                                            opaque_block_reuse.CopyOnWrite());
@@ -505,14 +519,15 @@ StmtSRef Fuse(ScheduleState self, const Array<StmtSRef>& loop_srefs) {
   Var fused_var = loops[0]->loop_var.copy_with_suffix(suffix);
   Array<PrimExpr> substitute_value;
   substitute_value.resize(loops.size());
-  PrimExpr lower = 1;
+  PrimExpr lower = make_const(fused_var->dtype, 1);
   for (int i = static_cast<int>(loops.size()) - 1; i > 0; i--) {
     substitute_value.Set(i, is_one(loops[i]->extent)
-                                ? 0
+                                ? make_const(fused_var->dtype, 0)
                                 : floordiv(floormod(fused_var, lower * loops[i]->extent), lower));
     lower = lower * loops[i]->extent;
   }
-  substitute_value.Set(0, is_one(loops[0]->extent) ? 0 : floordiv(fused_var, lower));
+  substitute_value.Set(
+      0, is_one(loops[0]->extent) ? make_const(fused_var->dtype, 0) : floordiv(fused_var, lower));
   Stmt new_stmt = loops.back()->body;
   Map<Block, Block> opaque_block_reuse;
   auto f_substitute = [&](const Var& v) -> Optional<PrimExpr> {
@@ -526,12 +541,15 @@ StmtSRef Fuse(ScheduleState self, const Array<StmtSRef>& loop_srefs) {
   new_stmt =
       SubstituteVarAndCollectOpaqueBlock(f_substitute, &opaque_block_reuse)(std::move(new_stmt));
   // Step 3. Generate a loop to replace the original loops
-  PrimExpr fused_extent = 1;
+  PrimExpr fused_extent = make_const(fused_var->dtype, 1);
   for (int i = 0; i < n; i++) {
     fused_extent *= loops[i]->extent;
   }
   fused_extent = analyzer.Simplify(fused_extent);
-  new_stmt = For(fused_var, 0, fused_extent, ForKind::kSerial, new_stmt);
+  // LOG(INFO) << "fused_var = " << fused_var << " " << fused_var->dtype
+  //           << ", extent = " << fused_extent << " " << fused_extent->dtype;
+  new_stmt =
+      For(fused_var, make_const(fused_var->dtype, 0), fused_extent, ForKind::kSerial, new_stmt);
   new_stmt = IterMapSimplifyBlockBinding::SimplifyBindings(
       std::move(new_stmt), GetLoops(loop_srefs[0]), opaque_block_reuse.CopyOnWrite());
   self->Replace(loop_srefs[0], new_stmt, opaque_block_reuse);

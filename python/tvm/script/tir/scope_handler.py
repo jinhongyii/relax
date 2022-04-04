@@ -467,12 +467,13 @@ class ForScopeHandler(ScopeHandler):
 
         self.node = node
         self.context = context
-        # generate loop vars
-        self.loop_vars = [
-            tvm.te.var(name, dtype="int32", span=span) for name, span in zip(loop_var_names, spans)
-        ]
         # collect loop infos by calling self.func
         call_with_error_reporting(context.report_error, span, self.func, *arg_list)
+        # generate loop vars
+        self.loop_vars = [
+            tvm.te.var(name, dtype=loop_info.extent.dtype, span=span)
+            for name, span, loop_info in zip(loop_var_names, spans, self.loop_info)
+        ]
         if len(self.loop_vars) != len(self.loop_info):
             self.context.report_error(
                 f"Inconsistent number of vars and loops, got {len(self.loop_vars)} "
