@@ -151,7 +151,12 @@ def FoldConstant() -> tvm.ir.transform.Pass:
 
 
 def FuseOps(fuse_opt_level=-1) -> tvm.ir.transform.Pass:
-    """Fuse operators in an expr to a larger operator according to some rules.
+    """This pass groups bindings in a dataflow block of Relax functions and generate a new grouped
+    Relax function for each group, according to the fusion algorithm described in the pass
+    implementation. By grouping bindings into new Relax functions, we substitute the bindings in
+    the function being manipulated into function calls to the new grouped function.
+
+    A follow-up pass named "FuseTIR" will generate a TIR PrimFunc for each grouped function.
 
     Parameters
     ----------
