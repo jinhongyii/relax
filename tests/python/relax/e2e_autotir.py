@@ -115,6 +115,7 @@ def apply_opt_before_tuning(relay_mod: IRModule, params: Dict[str, runtime.NDArr
     relax_mod = relay_translator.from_relay(bind_main_func)
     relax_mod = relax.transform.AnnotateTIROpPattern()(relax_mod)
     relax_mod = relax.transform.FuseOps()(relax_mod)
+    relax_mod = relax.transform.FuseTIR()(relax_mod)
     return relax_mod
 
 
