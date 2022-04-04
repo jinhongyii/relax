@@ -572,7 +572,7 @@ class BlockBuilder(Object):
         seqe = rx.SeqExpr(self._blocks, self._func_ret)
         # TODO: rx function can return Tuple as well, need to infer ret type
         func = rx.Function(
-            self._func_params, seqe, rx.DynTensorType(-1), rx.GlobalVar(self._func_name)
+            self._func_params, seqe, self._func_ret.checked_type, rx.GlobalVar(self._func_name)
         )
         self.add_func(func, self._func_name)
 

@@ -167,6 +167,8 @@ SeqExpr::SeqExpr(Array<BindingBlock> blocks, Expr body, Span span) {
   n->blocks = std::move(blocks);
   n->body = std::move(body);
   n->span = span;
+  n->checked_type_ = n->body->checked_type_;
+  n->shape_ = n->body->shape_;
   data_ = std::move(n);
 }
 
@@ -185,6 +187,8 @@ Function::Function(runtime::Optional<GlobalVar> name, Array<Var> params, Expr bo
   n->body = std::move(body);
   n->ret_type = std::move(ret_type);
   n->span = span;
+  n->checked_type_ = n->body->checked_type_;
+  n->shape_ = n->body->shape_;
   data_ = std::move(n);
 }
 

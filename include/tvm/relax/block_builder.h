@@ -168,6 +168,10 @@ class BlockBuilderNode : public Object {
   TVM_DECLARE_BASE_OBJECT_INFO(BlockBuilderNode, Object);
 
  private:
+  Optional<Expr> InferShape(const Expr& expr);
+
+  Type InferType(const Expr& expr);
+
   Var Emit(const Expr& expr, bool is_dataflow, std::string name_hint);
 
   /*! \brief The IRModule being built by the BlockBuilder. */

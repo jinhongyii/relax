@@ -298,14 +298,29 @@ BindingBlock BlockBuilderNode::EndBlock() {
   return ret;
 }
 
-Optional<Expr> InferShape(const Expr& expr, DiagnosticContext diag_ctx) {
+Optional<Expr> BlockBuilderNode::InferShape(const Expr& expr) {
+  auto is_static_shape = [](const Optional<Expr>& shape) -> bool {
+    if (!shape.defined()) return false;
+    const auto* shape_expr = shape.value().as<ShapeExprNode>();
+    if (shape_expr == nullptr) return false;
+    for (const PrimExpr& expr : shape_expr->values) {
+      if (!tir::is_const_int(expr)) return false;
+    }
+    return true;
+  };
   if (const auto* call = expr.as<CallNode>()) {
-    auto op_map = Op::GetAttrMap<FInferShape>("FInferShape");
     if (call->op.as<OpNode>()) {
+      auto op_map = Op::GetAttrMap<FInferShape>("FInferShape");
       Op op = Downcast<Op>(call->op);
       if (op_map.count(op)) {
-        return op_map[op](GetRef<Call>(call), diag_ctx);
+        return op_map[op](GetRef<Call>(call), diag_ctx_);
       }
+    } else if (const auto* gv = call->op.as<GlobalVarNode>()) {
+      const BaseFunc& func = context_mod_->Lookup(GetRef<GlobalVar>(gv));
+      Optional<Expr> possible_shape = Downcast<Optional<Expr>>(func->shape_);
+      if (is_static_shape(possible_shape)) {
+        return possible_shape;
+      };
     }
   } else if (const auto* tuple_item = expr.as<TupleGetItemNode>()) {
     const Expr& tuple = tuple_item->tuple;
@@ -318,13 +333,18 @@ Optional<Expr> InferShape(const Expr& expr, DiagnosticContext diag_ctx) {
   return NullOpt;
 }
 
-Type InferType(const Expr& expr, DiagnosticContext diag_ctx) {
+Type BlockBuilderNode::InferType(const Expr& expr) {
   if (const auto* call = expr.as<CallNode>()) {
     auto op_map = Op::GetAttrMap<FInferType>("FInferType");
     if (call->op.as<OpNode>()) {
       Op op = Downcast<Op>(call->op);
       if (op_map.count(op)) {
-        return op_map[op](GetRef<Call>(call), diag_ctx);
+        return op_map[op](GetRef<Call>(call), diag_ctx_);
+      }
+    } else if (const auto* gv = call->op.as<GlobalVarNode>()) {
+      const BaseFunc& func = context_mod_->Lookup(GetRef<GlobalVar>(gv));
+      if (const auto* relax_func = func.as<FunctionNode>()) {
+        return relax_func->checked_type_;
       }
     }
   } else if (const auto* tuple_item = expr.as<TupleGetItemNode>()) {
@@ -355,8 +375,8 @@ Var BlockBuilderNode::Emit(const Expr& expr, bool is_dataflow, std::string name_
     // TypeInference::InferCall(...)
     const Call& call = GetRef<Call>(call_node);
 
-    Optional<Expr> inferred_shape = InferShape(call, this->diag_ctx_);
-    Type inferred_type = InferType(call, this->diag_ctx_);
+    Optional<Expr> inferred_shape = InferShape(call);
+    Type inferred_type = InferType(call);
 
     var->shape_ = inferred_shape;
     var->checked_type_ = inferred_type;
@@ -523,7 +543,7 @@ Expr BlockBuilderNode::Normalize(const Expr& expr) {
 
   // Shape inference
   if (!normalized->shape_) {
-    auto inferred_shape = InferShape(normalized, this->diag_ctx_);
+    auto inferred_shape = InferShape(normalized);
     if (inferred_shape) {
       normalized->shape_ = this->Normalize(inferred_shape.value());
     }
@@ -531,7 +551,7 @@ Expr BlockBuilderNode::Normalize(const Expr& expr) {
 
   if (!normalized->checked_type_.defined()) {
     // Type inference
-    auto inferred_type = InferType(normalized, this->diag_ctx_);
+    auto inferred_type = InferType(normalized);
     normalized->checked_type_ = inferred_type;
   }
 
