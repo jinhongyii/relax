@@ -208,6 +208,80 @@ def test_annotate_opkind_add_zero_dim_element_wise():
     new_mod = relax.transform.AnnotateTIROpPattern()(mod)
     assert new_mod["add_zero_dim"].attrs["op_pattern"] == OpPatternKind.kElemWise
 
+def test_annotate_opkind_pooling():
+    @tvm.script.ir_module
+    class InputModule:
+        @T.prim_func
+        def max_pool2d(rxplaceholder_1: T.Buffer[(1, 64, 112, 112), "float32"], tensor_1: T.Buffer[(1, 64, 56, 56), "float32"]) -> None:
+            # function attr dict
+            T.func_attr({"global_symbol": "max_pool2d", "T.noalias": True})
+            # body
+            # with T.block("root")
+            pad_temp_1 = T.alloc_buffer([1, 64, 114, 114], dtype="float32")
+            for i0, i1, i2, i3 in T.grid(1, 64, 114, 114):
+                with T.block("pad_temp"):
+                    ax0, ax1, ax2, ax3 = T.axis.remap("SSSS", [i0, i1, i2, i3])
+                    T.reads(rxplaceholder_1[ax0, ax1, ax2 - 1, ax3 - 1])
+                    T.writes(pad_temp_1[ax0, ax1, ax2, ax3])
+                    pad_temp_1[ax0, ax1, ax2, ax3] = T.if_then_else(1 <= ax2 and ax2 < 113 and 1 <= ax3 and ax3 < 113, rxplaceholder_1[ax0, ax1, ax2 - 1, ax3 - 1], T.float32(-3.4028234663852886e+38), dtype="float32")
+            for i0, i1, i2, i3, i4, i5 in T.grid(1, 64, 56, 56, 3, 3):
+                with T.block("tensor"):
+                    ax0, ax1, ax2, ax3, rv0, rv1 = T.axis.remap("SSSSRR", [i0, i1, i2, i3, i4, i5])
+                    T.reads(tensor_1[ax0, ax1, ax2, ax3], pad_temp_1[ax0, ax1, ax2 * 2 + rv0, ax3 * 2 + rv1])
+                    T.writes(tensor_1[ax0, ax1, ax2, ax3])
+                    with T.init():
+                        tensor_1[ax0, ax1, ax2, ax3] = T.float32(-3.4028234663852886e+38)
+                    tensor_1[ax0, ax1, ax2, ax3] = T.max(tensor_1[ax0, ax1, ax2, ax3], pad_temp_1[ax0, ax1, ax2 * 2 + rv0, ax3 * 2 + rv1])
+    mod = InputModule
+    new_mod = relax.transform.AnnotateTIROpPattern()(mod)
+    assert new_mod["max_pool2d"].attrs["op_pattern"] == OpPatternKind.kOutEWiseFusable
+
+
+def test_annotate_opkind_softmax():
+    @tvm.script.ir_module
+    class InputModule:
+        @T.prim_func
+        def softmax(rxplaceholder_1: T.Buffer[(16, 16), "float32"], T_softmax_norm_1: T.Buffer[(16, 16), "float32"]) -> None:
+            # function attr dict
+            T.func_attr({"global_symbol": "softmax", "T.noalias": True})
+            # body
+            # with T.block("root")
+            T_softmax_maxelem_1 = T.alloc_buffer([16], dtype="float32")
+            T_softmax_exp_1 = T.alloc_buffer([16, 16], dtype="float32")
+            T_softmax_expsum_1 = T.alloc_buffer([16], dtype="float32")
+            for i0_7, i1_3 in T.grid(16, 16):
+                with T.block("T_softmax_maxelem"):
+                    i0_8, k = T.axis.remap("SR", [i0_7, i1_3])
+                    T.reads(T_softmax_maxelem_1[i0_8], rxplaceholder_1[i0_8, k])
+                    T.writes(T_softmax_maxelem_1[i0_8])
+                    with T.init():
+                        T_softmax_maxelem_1[i0_8] = T.float32(-3.4028234663852886e+38)
+                    T_softmax_maxelem_1[i0_8] = T.max(T_softmax_maxelem_1[i0_8], rxplaceholder_1[i0_8, k])
+            for i0_9, i1_4 in T.grid(16, 16):
+                with T.block("T_softmax_exp"):
+                    i0_10, i1_5 = T.axis.remap("SS", [i0_9, i1_4])
+                    T.reads(rxplaceholder_1[i0_10, i1_5], T_softmax_maxelem_1[i0_10])
+                    T.writes(T_softmax_exp_1[i0_10, i1_5])
+                    T_softmax_exp_1[i0_10, i1_5] = T.exp(rxplaceholder_1[i0_10, i1_5] - T_softmax_maxelem_1[i0_10], dtype="float32")
+            for i0_11, i1_6 in T.grid(16, 16):
+                with T.block("T_softmax_expsum"):
+                    i0_12, k = T.axis.remap("SR", [i0_11, i1_6])
+                    T.reads(T_softmax_expsum_1[i0_12], T_softmax_exp_1[i0_12, k])
+                    T.writes(T_softmax_expsum_1[i0_12])
+                    with T.init():
+                        T_softmax_expsum_1[i0_12] = T.float32(0)
+                    T_softmax_expsum_1[i0_12] = T_softmax_expsum_1[i0_12] + T_softmax_exp_1[i0_12, k]
+            for i0_13, i1_7 in T.grid(16, 16):
+                with T.block("T_softmax_norm"):
+                    i0_14, i1_8 = T.axis.remap("SS", [i0_13, i1_7])
+                    T.reads(T_softmax_exp_1[i0_14, i1_8], T_softmax_expsum_1[i0_14])
+                    T.writes(T_softmax_norm_1[i0_14, i1_8])
+                    T.block_attr({"axis":1})
+                    T_softmax_norm_1[i0_14, i1_8] = T_softmax_exp_1[i0_14, i1_8] / T_softmax_expsum_1[i0_14]
+
+    mod = InputModule
+    new_mod = relax.transform.AnnotateTIROpPattern()(mod)
+    assert new_mod["softmax"].attrs["op_pattern"] == OpPatternKind.kOutEWiseFusable
 
 if __name__ == "__main__":
     pytest.main([__file__])

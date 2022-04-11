@@ -2133,7 +2133,44 @@ bool CheckFMA(Stmt body) {
   return false;
 }
 
+bool CheckPureReducePattern(Array<Var> reduce_loops, Array<PrimExpr> indices) {
+  for (const PrimExpr& e : indices) {
+    int id = -1;
+    if (UsesVar(e, [&](const VarNode* var) {
+          for (int i = 0; i < static_cast<int>(reduce_loops.size()); i++) {
+            if (reduce_loops[i].get() == var) {
+              id = i;
+              return true;
+            }
+          }
+          return false;
+        })) {
+      if (!reduce_loops[id].same_as(e)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 class PatternKindAnalyzer : public StmtExprVisitor {
+ public:
+  PatternKindAnalyzer(const PrimFunc& func) {
+    for (const Var& param : func->params) {
+      param_buffers_.insert(func->buffer_map.Get(param).value());
+    }
+  }
+
+ private:
+  bool IsOutputBlock(const BlockNode* block) {
+    for (const BufferRegion write_region : block->writes) {
+      if (param_buffers_.count(write_region->buffer)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   void VisitStmt_(const BufferStoreNode* op) final {
     store_ = GetRef<BufferStore>(op);
     StmtVisitor::VisitStmt_(op);
@@ -2154,7 +2191,6 @@ class PatternKindAnalyzer : public StmtExprVisitor {
 
     loads_.clear();
     StmtVisitor::VisitStmt(op->body);
-
     relay::OpPatternKind index_pair_pattern = relay::kElemWise;
     if (loads_.empty()) {
       index_pair_pattern = relay::kBroadcast;
@@ -2173,22 +2209,34 @@ class PatternKindAnalyzer : public StmtExprVisitor {
       }
     }
     if (index_pair_pattern != relay::kOpaque) {
-      kind_ = std::max(kind_, index_pair_pattern);
+      if (IsOutputBlock(op) && kind_ == relay::kCommReduce) {
+        kind_ = relay::kOutEWiseFusable;
+      } else {
+        kind_ = std::max(kind_, index_pair_pattern);
+      }
       return;
     }
     bool has_reduction = false;
+    Array<Var> reduce_vars;
     for (IterVar it : op->iter_vars) {
       if (it->iter_type == kCommReduce) {
         has_reduction = true;
-        break;
+        reduce_vars.push_back(it->var);
       }
     }
     if (has_reduction) {
       if (CheckFMA(op->body)) {
         kind_ = std::max(kind_, relay::kOutEWiseFusable);
+        return;
       } else {
-        kind_ = std::max(kind_, relay::kCommReduce);
+        for (int i = 0; i < static_cast<int>(loads_.size()); ++i) {
+          if (!CheckPureReducePattern(reduce_vars, loads_[i]->indices)) {
+            kind_ = std::max(kind_, relay::kOutEWiseFusable);
+            return;
+          }
+        }
       }
+      kind_ = std::max(kind_, relay::kCommReduce);
     } else {
       kind_ = relay::kOpaque;
     }
@@ -2197,13 +2245,14 @@ class PatternKindAnalyzer : public StmtExprVisitor {
   BufferStore store_;
   Array<BufferLoad> loads_;
   relay::OpPatternKind kind_ = relay::kElemWise;
+  std::unordered_set<Buffer, ObjectPtrHash, ObjectPtrEqual> param_buffers_;
 
  public:
   relay::OpPatternKind GetResult() { return kind_; }
 };
 
 relay::OpPatternKind AnalyzeOpPatternKind(const PrimFunc& func) {
-  PatternKindAnalyzer analyzer;
+  PatternKindAnalyzer analyzer(func);
   analyzer(func->body);
   return analyzer.GetResult();
 }

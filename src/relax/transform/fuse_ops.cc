@@ -205,11 +205,6 @@ class GraphCreator : public ExprVisitor {
         pattern = OpPatternKind::kOpaque;
       }
 
-      if (global_var->name_hint == "max_pool2d" || global_var->name_hint == "avg_pool2d" ||
-          global_var->name_hint == "pool2d" || global_var->name_hint == "softmax") {
-        pattern = OpPatternKind::kOutEWiseFusable;
-      }
-
       // The pattern of the current binding variable node is set to the pattern of this operator.
       SetNodePattern(cur_binding_var_node_, pattern);
 
