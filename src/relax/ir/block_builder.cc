@@ -422,6 +422,7 @@ Var BlockBuilderNode::Emit(const Expr& expr, bool is_dataflow, std::string name_
                  << tuple_get_item_node->tuple->GetTypeKey();
     }
   } else {
+    var->checked_type_ = expr->checked_type_;
     cur_frame->bindings.push_back(VarBinding(var, expr));
     binding_table_[var->vid] = expr;
   }
