@@ -205,7 +205,8 @@ class GraphCreator : public ExprVisitor {
         pattern = OpPatternKind::kOpaque;
       }
 
-      if (global_var->name_hint == "max_pool2d") {
+      if (global_var->name_hint == "max_pool2d" || global_var->name_hint == "avg_pool2d" ||
+          global_var->name_hint == "pool2d" || global_var->name_hint == "softmax") {
         pattern = OpPatternKind::kOutEWiseFusable;
       }
 
