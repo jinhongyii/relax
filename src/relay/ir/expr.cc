@@ -79,9 +79,16 @@ TensorType ConstantNode::tensor_type() const {
 }
 
 Tuple::Tuple(tvm::Array<relay::Expr> fields, Span span) {
+  Array<Type> field_types;
+  field_types.reserve(fields.size());
+  for (const auto& field : fields) {
+    field_types.push_back(field->checked_type_);
+  }
+
   ObjectPtr<TupleNode> n = make_object<TupleNode>();
   n->fields = std::move(fields);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
+  n->checked_type_ = TupleType(field_types);
   n->span = std::move(span);
   data_ = std::move(n);
 }
