@@ -276,7 +276,9 @@ class DataTypeRewriter : public StmtExprMutator {
       PrimExpr e = VisitExpr(iv->var);
       Var var = Downcast<Var>(e);
       if (ivmap_.find(iv) == ivmap_.end()) {
-        ivmap_[iv] = IterVar(iv->dom, var, iv->iter_type, iv->thread_tag);
+        ivmap_[iv] = IterVar(Range::FromMinExtent(cast(var.dtype(), iv->dom->min),
+                                                  cast(var.dtype(), iv->dom->extent)),
+                             var, iv->iter_type, iv->thread_tag);
       }
       return AttrStmt(ivmap_[iv], op->attr_key, cast(var.dtype(), op->value), op->body);
     }

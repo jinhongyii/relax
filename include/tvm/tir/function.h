@@ -282,15 +282,6 @@ class TensorIntrin : public ObjectRef {
 PrimFunc Specialize(PrimFunc func, const Map<Var, ObjectRef>& param_map);
 
 /*!
- * \brief Fuse multiple PrimFuncs into fused one
- * \param funcs The PrimFuncs should be inlined. The list guides the order of fusion.
- * \param param_map A map indicate how data exchange between functions.
- *                  The map is from consumer params to the producer params.
- * \return The fused function.
- */
-PrimFunc FusePrimFuncs(const Array<PrimFunc>& funcs, const Map<Var, Var>& param_map);
-
-/*!
  * \brief PrimFunc specific attribute names.
  *
  * \sa tvm::attr

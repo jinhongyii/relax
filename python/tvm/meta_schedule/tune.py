@@ -21,7 +21,7 @@ import os.path
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 
 from tvm._ffi.registry import register_func
-from tvm.ir import IRModule, structural_hash, structural_equal
+from tvm.ir import IRModule, structural_hash
 from tvm.ir.transform import PassContext
 from tvm.runtime import Module, NDArray
 from tvm.target import Target
@@ -932,54 +932,24 @@ def tune_relax(
     from .relax_integration import extract_task_from_relax
 
     logger.info("Working directory: %s", work_dir)
-    extracted_tasks = extract_task_from_relax(mod, target)
     # pylint: disable=protected-access
-    tune_contexts = []
     target = Parse._target(target)
-    database = Parse._database(database, task_name, work_dir)
     # parse the tuning contexts
-    for task in extracted_tasks:
-        assert len(task.dispatched) == 1, "Only size 1 dispatched task list is supported for now"
-        tune_contexts.append(
-            Parse._tune_context(
-                tune_context=None,
-                mod=Parse._mod(task.dispatched[0]),
-                target=target,
-                config=config,
-                task_name=task.task_name,
-                space_generator=space,
-                sch_rules=sch_rules,
-                postprocs=postprocs,
-                mutator_probs=mutator_probs,
-                num_threads=num_threads,
-            )
-        )
-    # de-duplication
-    logger.info("Before task de-duplication: %d tasks", len(tune_contexts))
-    tasks: List[TuneContext] = []
-    hashes: List[int] = []
-    for i, task in enumerate(tune_contexts):
-        struct_hash: int = structural_hash(task.mod)
-        flag: bool = False
-        if struct_hash in hashes:
-            for other_task in tune_contexts[i + 1 :]:
-                if structural_equal(task.mod, other_task.mod):
-                    flag = True
-                    break
-        if not flag:
-            tasks.append(task)
-            hashes.append(struct_hash)
-    logger.info("After task de-duplication: %d tasks", len(tasks))
-
-    # parse the task scheduler
-    task_scheduler = Parse._task_scheduler(
-        task_scheduler,
-        tasks,
-        builder=Parse._builder(builder),
-        runner=Parse._runner(runner),
+    extracted_tasks = extract_task_from_relax(mod, target)
+    database = tune_extracted_tasks(
+        extracted_tasks,
+        target,
+        config,
+        work_dir,
+        builder=builder,
+        runner=runner,
         database=database,
-        cost_model=Parse._cost_model(cost_model),
-        measure_callbacks=Parse._callbacks(measure_callbacks),
+        cost_model=cost_model,
+        measure_callbacks=measure_callbacks,
+        task_scheduler=task_scheduler,
+        space=space,
+        sch_rules=sch_rules,
+        postprocs=postprocs,
+        mutator_probs=mutator_probs,
+        num_threads=num_threads,
     )
-    # pylint: enable=protected-access
-    task_scheduler.tune()
