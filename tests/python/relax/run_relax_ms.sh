@@ -28,7 +28,7 @@ run () {
         --rpc-port "$RPC_PORT"                              \
         --rpc-key "$RPC_KEY"                                \
         --tune-model $tune_model                            \
-        --layout $layout
+        --layout $layout                                    \
         2>&1 | tee "$log_dir/$name.log"
 }
 
