@@ -84,6 +84,11 @@ def _parse_args():
         type=int,
         required=True,
     )
+    args.add_argument(
+        "--layout",
+        type=str,
+        required=True,
+    )
     parsed = args.parse_args()
     parsed.target = tvm.target.Target(parsed.target)
     if parsed.target.attrs.get("mtriple", None) == "aarch64-linux-gnu":
@@ -188,11 +193,15 @@ def main():
 
     num_layers = 18
     batch_size = 1
-    image_shape = (3, 224, 224)
+    image_shape = (3, 224, 224) if ARGS.layout == "NCHW" else (224, 224, 3)
     input_shape = (batch_size,) + image_shape
 
     relay_mod, params = tvm.relay.testing.resnet.get_workload(
-        num_layers=num_layers, image_shape=image_shape, batch_size=batch_size, dtype="float32"
+        num_layers=num_layers,
+        image_shape=image_shape,
+        batch_size=batch_size,
+        layout=ARGS.layout,
+        dtype="float32",
     )
 
     # translate the ResNet model from Relay to Relax
