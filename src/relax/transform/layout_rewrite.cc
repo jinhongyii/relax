@@ -192,16 +192,22 @@ class LayoutRewriteInserter : public ExprMutator {
             GlobalVar layout_rewrite_func = CreateFuncFromIndexMap(pr.second);
 
             Var new_var = builder_->Emit(
-                Call(call_tir_op,
-                     {layout_rewrite_func, args[pr.first],
-                      ShapeExpr(NormalizeShapeForRelax(pr.second.tgt_shape))},
-                     {}, {DynTensorType(pr.second.tgt_shape.size(), pr.second.dtype)}));
+                Call(/*op=*/call_tir_op,
+                     /*args=*/
+                     {
+                         layout_rewrite_func,                                    //
+                         Tuple({args[pr.first]}),                                //
+                         ShapeExpr(NormalizeShapeForRelax(pr.second.tgt_shape))  //
+                     },
+                     /*attrs=*/{},
+                     /*type_args=*/{DynTensorType(pr.second.tgt_shape.size(), pr.second.dtype)}));
             args.Set(pr.first, new_var);
           }
           return Call(call_tir_op, {call->args[0], Tuple(args), call->args[2]}, {},
                       call->type_args);
         } else {
           Expr arg = call->args[1];
+          ICHECK(arg->IsInstance<TupleNode>());
           ICHECK(index_maps[func.get()].size() == 1);
           LayoutRewriteInfo info = index_maps[func.get()][0].second;
           GlobalVar layout_rewrite_func = CreateFuncFromIndexMap(info);
@@ -210,8 +216,8 @@ class LayoutRewriteInserter : public ExprMutator {
               Call(call_tir_op,
                    {layout_rewrite_func, arg, ShapeExpr(NormalizeShapeForRelax(info.tgt_shape))},
                    {}, {DynTensorType(info.tgt_shape.size(), info.dtype)}));
-          return Call(call_tir_op, {call->args[0], new_var, call->args[2], call->args[3]}, {},
-                      call->type_args);
+          return Call(call_tir_op, {call->args[0], Tuple({new_var}), call->args[2], call->args[3]},
+                      {}, call->type_args);
         }
       }
     }
