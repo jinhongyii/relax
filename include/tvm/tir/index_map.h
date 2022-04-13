@@ -146,15 +146,6 @@ class IndexMap : public ObjectRef {
    * buffering as a map `lambda *indices: [buffer_loop%2, *indices]`).
    */
   IndexMap Inverse(Array<Range> initial_ranges) const;
-  
-  /*!
-   * \brief Create an index map from a packed function
-   * \param ndim The number of dimensions
-   * \param func The function to be applied
-   * \return The created index map
-   */
-  static IndexMap FromFunc(int ndim, runtime::TypedPackedFunc<Array<PrimExpr>(Array<Var>)> func);
-  
 
   TVM_DEFINE_OBJECT_REF_METHODS(IndexMap, ObjectRef, IndexMapNode);
 };

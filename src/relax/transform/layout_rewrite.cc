@@ -44,27 +44,26 @@ struct LayoutRewriteInfo {
   DataType dtype;
 };
 
-Array<PrimExpr> NormalizeShapeForRelax(const Array<PrimExpr>& shape){
+Array<PrimExpr> NormalizeShapeForRelax(const Array<PrimExpr>& shape) {
   Array<PrimExpr> res;
   for (const auto& e : shape) {
-    res.push_back(IntImm(DataType::Int(64),e.as<IntImmNode>()->value));
+    res.push_back(IntImm(DataType::Int(64), e.as<IntImmNode>()->value));
   }
   return res;
 }
-
 
 class LayoutRewriteInserter : public ExprMutator {
  public:
   LayoutRewriteInserter(IRModule module) : module_(GetRef<IRModule>(module.CopyOnWrite())) {
     InitializeIndexMaps();
   }
-  
-  void InitializeIndexMaps(){
+
+  void InitializeIndexMaps() {
     Map<GlobalVar, BaseFunc> funcs = module_->functions;
     for (const std::pair<GlobalVar, BaseFunc>& pr : funcs) {
       if (const auto* f = pr.second.as<tir::PrimFuncNode>()) {
         index_maps[f] = {};
-        
+
         IRModule tmp_mod({{GlobalVar("main"), GetRef<PrimFunc>(f)}});
         tir::Schedule sch =
             tir::Schedule::Concrete(tmp_mod, -1, 0, tir::ScheduleErrorRenderLevel::kDetail);
@@ -101,7 +100,8 @@ class LayoutRewriteInserter : public ExprMutator {
                 Optional<tir::IndexMap> index_map =
                     tir::SuggestIndexMap(buffer.value(), realize, loops, &analyzer);
                 if (index_map.defined()) {
-                  sch->TransformLayout(block_rv, buffer_index, false, index_map.value());
+                  sch->TransformLayout(block_rv, buffer_index, tir::BufferIndexType::kRead,
+                                       index_map.value());
                   DataType dtype = buffer.value()->dtype;
                   Array<PrimExpr> src_shape = buffer.value()->shape;
                   Array<PrimExpr> tgt_shape = index_map.value()->MapShape(src_shape);
@@ -120,7 +120,7 @@ class LayoutRewriteInserter : public ExprMutator {
       }
     }
   }
-  
+
   void Mutate() {
     auto funcs = module_->functions;
     for (auto pr : funcs) {
@@ -191,10 +191,11 @@ class LayoutRewriteInserter : public ExprMutator {
           for (auto pr : index_maps[func.get()]) {
             GlobalVar layout_rewrite_func = CreateFuncFromIndexMap(pr.second);
 
-            Var new_var = builder_->Emit(Call(
-                call_tir_op, {layout_rewrite_func, args[pr.first], ShapeExpr(NormalizeShapeForRelax(pr.second
-                                                                                 .tgt_shape))},
-                {}, {DynTensorType(pr.second.tgt_shape.size(), pr.second.dtype)}));
+            Var new_var = builder_->Emit(
+                Call(call_tir_op,
+                     {layout_rewrite_func, args[pr.first],
+                      ShapeExpr(NormalizeShapeForRelax(pr.second.tgt_shape))},
+                     {}, {DynTensorType(pr.second.tgt_shape.size(), pr.second.dtype)}));
             args.Set(pr.first, new_var);
           }
           return Call(call_tir_op, {call->args[0], Tuple(args), call->args[2]}, {},
@@ -206,9 +207,9 @@ class LayoutRewriteInserter : public ExprMutator {
           GlobalVar layout_rewrite_func = CreateFuncFromIndexMap(info);
 
           Var new_var = builder_->Emit(
-              Call(call_tir_op, {layout_rewrite_func, arg, ShapeExpr(NormalizeShapeForRelax(info
-                                                                                                .tgt_shape))}, {},
-                   {DynTensorType(info.tgt_shape.size(), info.dtype)}));
+              Call(call_tir_op,
+                   {layout_rewrite_func, arg, ShapeExpr(NormalizeShapeForRelax(info.tgt_shape))},
+                   {}, {DynTensorType(info.tgt_shape.size(), info.dtype)}));
           return Call(call_tir_op, {call->args[0], new_var, call->args[2], call->args[3]}, {},
                       call->type_args);
         }

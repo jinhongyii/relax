@@ -26,8 +26,6 @@
 #include <tvm/tir/analysis.h>
 #include <tvm/tir/function.h>
 
-#include "../../printer/text_printer.h"
-
 namespace tvm {
 namespace relax {
 

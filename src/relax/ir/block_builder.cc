@@ -33,24 +33,40 @@ namespace tvm {
 namespace relax {
 
 // Helper function to infer the shape of a Call.
-Optional<Expr> InferShape(const Call& call, DiagnosticContext diag_ctx) {
+Optional<Expr> InferShape(const Call& call, DiagnosticContext diag_ctx, IRModule ctx_mod) {
   auto op_map = Op::GetAttrMap<FInferShape>("FInferShape");
   if (call->op.as<OpNode>()) {
     Op op = Downcast<Op>(call->op);
     if (op_map.count(op)) {
       return op_map[op](call, diag_ctx);
     }
+  } else if (const auto* gv = call->op.as<GlobalVarNode>()) {
+    auto it_func = ctx_mod->functions.find(GetRef<GlobalVar>(gv));
+
+    if (it_func != ctx_mod->functions.end()) {
+      if (const auto* func = (*it_func).second.as<FunctionNode>()) {
+        return func->shape();
+      }
+    }
   }
   return NullOpt;
 }
 
 // Helper function to infer the type of a Call.
-Type InferType(const Call& call, DiagnosticContext diag_ctx) {
+Type InferType(const Call& call, DiagnosticContext diag_ctx, IRModule ctx_mod) {
   auto op_map = Op::GetAttrMap<FInferType>("FInferType");
   if (call->op.as<OpNode>()) {
     Op op = Downcast<Op>(call->op);
     if (op_map.count(op)) {
       return op_map[op](call, diag_ctx);
+    }
+  } else if (const auto* gv = call->op.as<GlobalVarNode>()) {
+    auto it_func = ctx_mod->functions.find(GetRef<GlobalVar>(gv));
+
+    if (it_func != ctx_mod->functions.end()) {
+      if (const auto* func = (*it_func).second.as<FunctionNode>()) {
+        return func->checked_type_;
+      }
     }
   }
   return Type();
@@ -179,7 +195,8 @@ class BlockBuilderNode::ExprNormalizer : public ExprFunctor<Expr(const Expr&)> {
 
     if (!call->shape_) {
       // shape inference
-      auto inferred_shape = InferShape(call, this->builder_->diag_ctx_);
+      auto inferred_shape =
+          InferShape(call, this->builder_->diag_ctx_, this->builder_->context_mod_);
       if (inferred_shape) {
         call->shape_ = inferred_shape.value();
       }
@@ -187,7 +204,7 @@ class BlockBuilderNode::ExprNormalizer : public ExprFunctor<Expr(const Expr&)> {
 
     if (!call->checked_type_.defined()) {
       // type inference
-      auto inferred_type = InferType(call, this->builder_->diag_ctx_);
+      auto inferred_type = InferType(call, this->builder_->diag_ctx_, this->builder_->context_mod_);
       call->checked_type_ = inferred_type;
     }
     return call;

@@ -23,6 +23,7 @@ from tvm.ir.base import assert_structural_equal
 import tvm.script
 from tvm.script import tir as T, relax as R
 
+
 def test_layout_rewrite():
     @tvm.script.ir_module
     class InputModule:
@@ -34,30 +35,38 @@ def test_layout_rewrite():
             C = T.match_buffer(z, (16, 16))
             for i0, j, k0, i1, k1 in T.grid(4, 16, 4, 4, 4):
                 with T.block("matmul"):
-                    vi = T.axis.S(16, i0*4+i1)
+                    vi = T.axis.S(16, i0 * 4 + i1)
                     vj = T.axis.S(16, j)
-                    vk = T.axis.R(16, k0*4+k1)
-                    T.block_attr({"layout_free_placeholders":[A]})
+                    vk = T.axis.R(16, k0 * 4 + k1)
+                    T.block_attr({"layout_free_placeholders": [A]})
                     with T.init():
                         C[vi, vj] = T.float32(0)
                     C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vk, vj]
 
         @R.function
-        def foo(x: Tensor[(16, 16), "float32"], w: Tensor[(16, 16), "float32"]) -> Tensor[(16, 16), "float32"]:
+        def foo(
+            x: Tensor((16, 16), "float32"), w: Tensor((16, 16), "float32")
+        ) -> Tensor((16, 16), "float32"):
             gv0 = R.call_tir(tir_matmul, (x, w), (16, 16), dtype="float32")
             return gv0
 
     @tvm.script.ir_module
     class OutputModule:
         @R.function
-        def foo(x: Tensor[(16, 16), "float32"], w: Tensor[(16, 16), "float32"]) -> Tensor[(16, 16), "float32"]:
+        def foo(
+            x: Tensor((16, 16), "float32"), w: Tensor((16, 16), "float32")
+        ) -> Tensor((16, 16), "float32"):
             # block 0
             gv = relax.call_tir(layout_rewrite0, (x,), (4, 4, 4, 4), dtype="float32")
             gv0 = relax.call_tir(tir_matmul, (gv, w), (16, 16), dtype="float32")
             return gv0
-    
+
         @T.prim_func
-        def tir_matmul(A_1: T.Buffer[(4, 4, 4, 4), "float32"], B_1: T.Buffer[(16, 16), "float32"], C_1: T.Buffer[(16, 16), "float32"]) -> None:
+        def tir_matmul(
+            A_1: T.Buffer[(4, 4, 4, 4), "float32"],
+            B_1: T.Buffer[(16, 16), "float32"],
+            C_1: T.Buffer[(16, 16), "float32"],
+        ) -> None:
             # function attr dict
             T.func_attr({"global_symbol": "tir_matmul"})
             # body
@@ -67,14 +76,16 @@ def test_layout_rewrite():
                     vi = T.axis.spatial(16, i0 * 4 + i1)
                     vj = T.axis.spatial(16, j)
                     vk = T.axis.reduce(16, k0 * 4 + k1)
-                    T.reads(C_1[vi, vj], A_1[vi // 4, vk // 4, vi % 4, vk % 4], B_1[vk, vj])
+                    T.reads(A_1[vi // 4, vk // 4, vi % 4, vk % 4], B_1[vk, vj])
                     T.writes(C_1[vi, vj])
                     with T.init():
                         C_1[vi, vj] = T.float32(0)
                     C_1[vi, vj] = C_1[vi, vj] + A_1[vi // 4, vk // 4, vi % 4, vk % 4] * B_1[vk, vj]
-    
+
         @T.prim_func
-        def layout_rewrite0(src_1: T.Buffer[(16, 16), "float32"], tgt_1: T.Buffer[(4, 4, 4, 4), "float32"]) -> None:
+        def layout_rewrite0(
+            src_1: T.Buffer[(16, 16), "float32"], tgt_1: T.Buffer[(4, 4, 4, 4), "float32"]
+        ) -> None:
             # function attr dict
             T.func_attr({"global_symbol": "layout_rewrite0", "tir.noalias": True})
             # body
@@ -85,9 +96,11 @@ def test_layout_rewrite():
                     T.reads(src_1[i0, i1])
                     T.writes(tgt_1[i0 // 4, i1 // 4, i0 % 4, i1 % 4])
                     tgt_1[i0 // 4, i1 // 4, i0 % 4, i1 % 4] = src_1[i0, i1]
+
     mod = InputModule
-    new_mod =relax.transform.LayoutRewrite()(mod)
+    new_mod = relax.transform.LayoutRewrite()(mod)
     assert_structural_equal(new_mod, OutputModule, map_free_vars=True)
+
 
 if __name__ == "__main__":
     test_layout_rewrite()

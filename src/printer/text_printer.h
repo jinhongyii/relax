@@ -607,6 +607,7 @@ class TextPrinter {
   }
 
   Doc PrintRelax(const ObjectRef& node) {
+    relax_text_printer_.Print(node);
     Doc doc;
     if (show_meta_data_ && !meta_.empty()) {
       doc << "metadata = ";

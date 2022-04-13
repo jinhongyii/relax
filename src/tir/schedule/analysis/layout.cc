@@ -200,6 +200,35 @@ Optional<IndexMap> SuggestIndexMap(const Buffer& buffer, const Array<PrimExpr>& 
   return IndexMap::FromFunc(ndim, f_alter_layout);
 }
 
+Optional<IndexMap> SuggestIndexMap(const Buffer& buffer, BlockRealize realize,
+                                   const Array<For>& loops, arith::Analyzer* analyzer) {
+  class Collector : public StmtExprVisitor {
+    void VisitExpr_(const BufferLoadNode* op) final {
+      if (op->buffer.same_as(buffer)) {
+        indices = op->indices;
+      }
+      ExprVisitor::VisitExpr_(op);
+    }
+
+   public:
+    Collector(Buffer buffer) : buffer(buffer) {}
+
+    Buffer buffer;
+    Array<PrimExpr> indices;
+  };
+  Map<Var, PrimExpr> subst_map;
+  for (int i = 0; i < static_cast<int>(realize->iter_values.size()); i++) {
+    subst_map.Set(realize->block->iter_vars[i]->var, realize->iter_values[i]);
+  }
+  Collector collector(buffer);
+  collector(realize->block->body);
+  Array<PrimExpr> subst_indices;
+  for (PrimExpr e : collector.indices) {
+    subst_indices.push_back(Substitute(e, subst_map));
+  }
+  return SuggestIndexMap(buffer, subst_indices, loops, realize->predicate, analyzer);
+}
+
 TVM_REGISTER_GLOBAL("tir.schedule.SuggestIndexMap")
     .set_body_typed([](Buffer buffer, Array<PrimExpr> indices, Array<For> loops,
                        PrimExpr predicate) {

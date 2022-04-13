@@ -202,7 +202,9 @@ def main():
             target=ARGS.target,
             config=EvolutionarySearchConfig(
                 num_trials_per_iter=64,
-                num_trials_total=ARGS.num_trials,
+                max_trials_per_task=ARGS.num_trials,
+                max_trials_global=ARGS.num_trials,
+                init_min_unmeasured=50,
             ),
             runner=ms.runner.RPCRunner(
                 rpc_config=ARGS.rpc_config,

@@ -455,9 +455,6 @@ class FusedTIRConstructor : public ExprVisitor {
     // creating buffers for func params
     for (const Var& param : op->params) {
       Type type = param->checked_type_;
-      if (!type.defined()) {
-        type = param->type_annotation.value_or(Type());
-      }
       if (type.defined()) {
         Array<tir::Buffer> buffers = CreateBuffers(type, param->shape());
         for (int i = 0; i < static_cast<int>(buffers.size()); i++) {
