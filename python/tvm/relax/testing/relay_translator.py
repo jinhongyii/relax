@@ -60,16 +60,54 @@ class BatchNorm(RelayOpConverter):
 class Conv2D(RelayOpConverter):
     """Operator converter for nn.conv2d."""
 
+    @staticmethod
+    def _judge_winograd(
+        N,
+        KH,
+        KW,
+        stride_h,
+        stride_w,
+        dilation_h,
+        dilation_w,
+        data_dtype,
+        kernel_dtype,
+    ):
+        return (
+            ("float" in data_dtype)
+            and ("float" in kernel_dtype)
+            and (KH == 3 and KW == 3)
+            and (stride_h == 1 and stride_w == 1)
+            and (dilation_h == 1 and dilation_w == 1)
+        )
+
     @classmethod
     def _impl(cls, inputs, attrs):
+        # create new_input
         new_inputs = [*inputs]
         if attrs is not None:
             new_inputs.append(attrs["strides"])
             new_inputs.append(attrs["padding"])
             new_inputs.append(attrs["dilation"])
+            new_inputs.append("float32")
         else:
             raise RuntimeError("attrs must be provided to conv2d op.")
-        return nn.emit_te(topi.nn.conv2d_nchw, *new_inputs)
+
+        layout = attrs.data_layout
+        if layout == "NCHW":
+            return nn.emit_te(topi.nn.conv2d_nchw, *new_inputs)
+        elif layout == "NHWC":
+            data, kernel = inputs
+            N, H, W, _ = topi.utils.get_const_tuple(data.shape)
+            KH, KW, CI, CO = topi.utils.get_const_tuple(kernel.shape)
+            stride_h, stride_w = attrs.get_int_tuple("strides")
+            dilation_h, dilation_w = attrs.get_int_tuple("dilation")
+
+            if cls._judge_winograd(
+                N, KH, KW, stride_h, stride_w, dilation_h, dilation_w, "float32", "float32"
+            ):
+                return nn.emit_te(topi.nn.conv2d_winograd_nhwc, *new_inputs)
+            else:
+                return nn.emit_te(topi.nn.conv2d_nhwc, *new_inputs)
 
 
 class BatchMatmul(RelayOpConverter):
