@@ -108,11 +108,15 @@ ARGS = _parse_args()
 
 
 def apply_opt_before_tuning(relay_mod: IRModule, params: Dict[str, runtime.NDArray]):
-    relay_mod = relay.transform.SimplifyInference()(relay_mod)
-    main_func = relay_mod["main"]
-    bind_main_func = relay.build_module.bind_params_by_name(main_func, params)
+    with transform.PassContext(opt_level=3):
+        main_func = relay_mod["main"]
+        bind_main_func = relay.build_module.bind_params_by_name(main_func, params)
+        relay_mod = IRModule.from_expr(bind_main_func)
+        relay_mod = relay.transform.SimplifyInference()(relay_mod)
+        relay_mod = relay.transform.FoldConstant()(relay_mod)
+        relay_mod = relay.transform.FoldScaleAxis()(relay_mod)
 
-    relax_mod = relay_translator.from_relay(bind_main_func)
+    relax_mod = relay_translator.from_relay(relay_mod["main"])
     relax_mod = relax.transform.AnnotateTIROpPattern()(relax_mod)
     relax_mod = relax.transform.FuseOps()(relax_mod)
     relax_mod = relax.transform.FuseTIR()(relax_mod)
@@ -122,8 +126,9 @@ def apply_opt_before_tuning(relay_mod: IRModule, params: Dict[str, runtime.NDArr
 
 def apply_opt_after_tuning(relax_mod: IRModule, database: ms.database.Database, target: Target):
     relax_mod = relax.transform.MetaScheduleApplyHistoryBest(database, target)(relax_mod)
-    relax_mod = relax.transform.LayoutRewrite()(relax_mod)
-    relax_mod = relax.transform.FoldConstant()(relax_mod)
+    if ARGS.target.kind.name != "cuda":
+        relax_mod = relax.transform.LayoutRewrite()(relax_mod)
+        relax_mod = relax.transform.FoldConstant()(relax_mod)
     return relax_mod
 
 
