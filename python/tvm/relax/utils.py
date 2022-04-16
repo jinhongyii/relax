@@ -37,7 +37,7 @@ def tir_partitioner(mod: IRModule) -> List[IRModule]:
     for gvar in mod.get_global_vars():
         if isinstance(mod[gvar], PrimFunc):
             tir_mod = IRModule({})
-            tir_mod[gvar] = mod[gvar]
+            tir_mod["main"] = mod[gvar]
             partitions.append(tir_mod)
     return partitions
 

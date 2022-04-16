@@ -92,7 +92,11 @@ def extract_task_from_relax(mod: Union[IRModule, RelaxFunc], target: Target) -> 
 
     tasks = []
     for i, tir_mod in enumerate(tir_mods):
-        task_name = tir_mod.get_global_vars()[0].name_hint
+        var = tir_mod.get_global_vars()[0]
+        task_name =var.name_hint
+        func = tir_mod[var]
+        func = func.with_attr("global_symbol","main")
+        tir_mod[var] = func
         # The second arg to ExtractedTask is supposed to be a high-level IRModule,
         # passing tir_mod as a workaround.
         tasks.append(ExtractedTask(task_name, tir_mod, target, [tir_mod], tir_counts[i]))

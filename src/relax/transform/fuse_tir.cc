@@ -616,6 +616,7 @@ class TIRFuseMutator : public ExprMutator {
     // Handle call_tir in main function
     GlobalVar gv = Downcast<GlobalVar>(call->args[0]);
     tir::PrimFunc func = Downcast<tir::PrimFunc>(mod_->Lookup(gv));
+    func = WithoutAttr(func, "op_pattern");
     GlobalVar new_gv = this->builder_->AddFuncToContext(func, gv->name_hint);
     return Call(call->op, {new_gv, call->args[1], call->args[2]}, call->attrs, call->type_args,
                 call->span);

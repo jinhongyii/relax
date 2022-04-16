@@ -169,7 +169,7 @@ def register_topi_compute(task_name, func=None):
             attrs = {}
             for k, v in node.op.attrs.items():
                 attrs[k] = v
-            attrs["workload"] = workload
+            # attrs["workload"] = workload
             if isinstance(op, tensor.ComputeOp):
                 op = tvm.te._ffi_api.ComputeOp(op.name, op.tag, attrs, op.axis, op.body)
             elif isinstance(op, tensor.ExternOp):
