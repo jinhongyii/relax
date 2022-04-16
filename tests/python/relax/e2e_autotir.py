@@ -119,6 +119,9 @@ def apply_opt_before_tuning(relay_mod: IRModule, params: Dict[str, runtime.NDArr
         relay_mod = relay.transform.SimplifyInference()(relay_mod)
         relay_mod = relay.transform.FoldConstant()(relay_mod)
         relay_mod = relay.transform.FoldScaleAxis()(relay_mod)
+        relay_mod = relay.transform.CanonicalizeOps()(relay_mod)
+        relay_mod = relay.transform.AlterOpLayout()(relay_mod)
+        relay_mod = relay.transform.FoldConstant()(relay_mod)
 
         relax_mod = relay_translator.from_relay(relay_mod["main"])
         relax_mod = relax.transform.AnnotateTIROpPattern()(relax_mod)
