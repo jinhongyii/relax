@@ -210,6 +210,10 @@ BlockRealize GenerateBlockFromTensors(const te::ComputeOp& compute_op,
   for (const auto& pair : compute_op->attrs) {
     const String& key = pair.first;
     const ObjectRef& value = pair.second;
+    //TODO(Hongyi): Move "layout free placeholders" to func attr
+    if(key=="layout_free_placeholders") {
+      continue;
+    }
     // TensorIR will not allow Tensor data structure
     if (value->IsInstance<ArrayNode>()) {
       const auto array_value = Downcast<Array<ObjectRef>>(value);
