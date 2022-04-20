@@ -543,6 +543,20 @@ class ScheduleNode : public runtime::Object {
    */
   virtual void TransformLayout(const BlockRV& block_rv, int buffer_index,
                                BufferIndexType buffer_index_type, const IndexMap& index_map) = 0;
+  
+  /*!
+   * \brief Apply a transformation represented by IndexMap to buffer and generate a preproc block
+   * \details The indices and the access region to the target buffer is transformed by the given
+   * index_map. The index_map is used to infer the new shape of the buffer. Buffer must be
+   * a function parameter (it cannot be a buffer subregion created via 'match_buffer' or
+   * allocated in block).
+   * \param block_rv The block that accesses the target buffer.
+   * \param buffer_index The index of the buffer in block's read or write region.
+   * \param buffer_index_type The type of the buffer index, kRead or kWrite.
+   * \param index_map The transformation to apply.
+   */
+  virtual void TransformLayoutWithPreProc(const BlockRV& block_rv, int buffer_index,
+                               BufferIndexType buffer_index_type, const IndexMap& index_map) = 0;
 
   /******** Schedule: Misc ********/
   /*! \brief A no-op that marks the start of postprocessing phase of scheduling */

@@ -134,6 +134,9 @@ class ConcreteScheduleNode : public ScheduleNode {
   /******** Schedule: Layout transformation ********/
   void TransformLayout(const BlockRV& block_rv, int buffer_index, BufferIndexType buffer_index_type,
                        const IndexMap& index_map) override;
+  void TransformLayoutWithPreProc(const BlockRV& block_rv, int buffer_index,
+                                  BufferIndexType buffer_index_type,
+                                  const IndexMap& index_map) override;
   /******** Schedule: Misc ********/
   void EnterPostproc() override {}
 

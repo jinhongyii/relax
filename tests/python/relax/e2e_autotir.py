@@ -130,6 +130,7 @@ def apply_opt_before_tuning(
         relax_mod = relax.transform.FuseOps()(relax_mod)
         relax_mod = relax.transform.FuseTIR()(relax_mod)
         relax_mod = tir.transform.PromoteDataType()(relax_mod)
+        relax_mod = relax.transform.AnnotateLayoutRewriteBuffers()(relax_mod)
     return relax_mod
 
 
@@ -137,7 +138,7 @@ def apply_opt_after_tuning(relax_mod: IRModule, database: ms.database.Database, 
     with transform.PassContext(opt_level=3):
         relax_mod = relax.transform.MetaScheduleApplyHistoryBest(database, target)(relax_mod)
         if ARGS.target.kind.name != "cuda":
-            relax_mod = relax.transform.LayoutRewrite()(relax_mod)
+            relax_mod = relax.transform.SplitPreProc()(relax_mod)
             relax_mod = relax.transform.FoldConstant()(relax_mod)
     return relax_mod
 

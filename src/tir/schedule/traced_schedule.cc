@@ -442,6 +442,19 @@ void TracedScheduleNode::TransformLayout(const BlockRV& block_rv, int buffer_ind
                            /*outputs=*/{}));
 }
 
+void TracedScheduleNode::TransformLayoutWithPreProc(const BlockRV& block_rv, int buffer_index,
+                                                    BufferIndexType buffer_index_type,
+                                                    const IndexMap& index_map) {
+  ConcreteScheduleNode::TransformLayoutWithPreProc(block_rv, buffer_index, buffer_index_type,
+                                                   index_map);
+  static const InstructionKind& kind = InstructionKind::Get("TransformLayoutWithPreProc");
+  trace_->Append(
+      /*inst=*/Instruction(/*kind=*/kind,
+                           /*inputs=*/{block_rv},
+                           /*attrs=*/{Integer(buffer_index), Integer(buffer_index_type), index_map},
+                           /*outputs=*/{}));
+}
+
 /******** Schedule: Misc ********/
 
 void TracedScheduleNode::EnterPostproc() {

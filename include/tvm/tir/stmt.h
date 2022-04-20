@@ -1509,6 +1509,8 @@ constexpr const char* meta_schedule_unroll_explicit = "meta_schedule.unroll_expl
 /*! \brief Mark auto-unroll setting on the block. */
 constexpr const char* meta_schedule_unroll_implicit = "meta_schedule.unroll_implicit";
 
+/*! \brief Mark auto-unroll setting on the block. */
+constexpr const char* layout_rewrite_buffers = "layout_rewrite_buffers";
 /*!
  * \brief Check if attr_key is a pragma key extension
  * \param attr_key The attr key to be compared

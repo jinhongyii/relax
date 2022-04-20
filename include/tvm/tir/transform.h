@@ -631,6 +631,12 @@ TVM_DLL Pass RenormalizeSplitPattern();
  */
 TVM_DLL Pass PromoteDataType();
 
+/*!
+ * \brief Remove the preproc block
+ * \return The pass.
+ */
+TVM_DLL Pass RemoveWeightLayoutRewriteBlock();
+
 }  // namespace transform
 }  // namespace tir
 }  // namespace tvm

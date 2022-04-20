@@ -16,6 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+#include <tvm/tir/transform.h>
+#include <tvm/driver/driver_api.h>
 #include "../utils.h"
 
 namespace tvm {

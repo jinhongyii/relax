@@ -693,6 +693,14 @@ void ConcreteScheduleNode::TransformLayout(const BlockRV& block_rv, int buffer_i
   TVM_TIR_SCHEDULE_END("transform_layout", this->error_render_level_);
 }
 
+void ConcreteScheduleNode::TransformLayoutWithPreProc(const BlockRV& block_rv, int buffer_index,
+                                           BufferIndexType buffer_index_type,
+                                           const IndexMap& index_map) {
+  TVM_TIR_SCHEDULE_BEGIN();
+  tir::TransformLayoutWithPreProc(state_, this->GetSRef(block_rv), buffer_index, buffer_index_type, index_map);
+  this->state_->DebugVerify();
+  TVM_TIR_SCHEDULE_END("transform_layout", this->error_render_level_);
+}
 /******** Schedule: Misc ********/
 
 }  // namespace tir

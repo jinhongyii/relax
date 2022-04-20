@@ -177,6 +177,18 @@ TVM_DLL Pass BindParams(String name, Map<String, runtime::NDArray> params);
  */
 TVM_DLL Pass FuseTIR();
 
+/*!
+ * \brief Annotate the TIR func with the buffers to perform layout rewrite
+ * \return The Pass.
+ */
+TVM_DLL Pass AnnotateLayoutRewriteBuffers();
+
+/*!
+ * \brief Split the preproc block into a separate tir function
+ * \return The Pass.
+ */
+TVM_DLL Pass SplitPreproc();
+
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm

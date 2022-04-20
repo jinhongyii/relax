@@ -431,6 +431,22 @@ TVM_DLL void Unannotate(ScheduleState self, const StmtSRef& sref, const String& 
 TVM_DLL void TransformLayout(ScheduleState self, const StmtSRef& block_sref, int buffer_index,
                              BufferIndexType buffer_index_type, const IndexMap& index_map);
 
+/*!
+ * \brief Apply a transformation represented by IndexMap to buffer and generate a preproc block
+ * \details The indices and the access region to the target buffer is transformed by the given
+ * index_map. The index_map is used to infer the new shape of the buffer. Buffer must be
+ * a function parameter (it cannot be a buffer subregion created via 'match_buffer' or
+ * allocated in block).
+ * \param self The state of the schedule
+ * \param block_sref The block sref that accesses the target buffer.
+ * \param buffer_index The index of the buffer in block's read or write region.
+ * \param buffer_index_type The type of the buffer index, kRead or kWrite.
+ * \param index_map The transformation to apply.
+ */
+TVM_DLL void TransformLayoutWithPreProc(ScheduleState self, const StmtSRef& block_sref,
+                                        int buffer_index, BufferIndexType buffer_index_type,
+                                        const IndexMap& index_map);
+
 /******** Schedule: Misc ********/
 
 }  // namespace tir

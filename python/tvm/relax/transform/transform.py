@@ -246,6 +246,23 @@ def FoldConstant() -> tvm.ir.transform.Pass:
     """
     return _ffi_api.FoldConstant()
 
+def AnnotateLayoutRewriteBuffers() -> tvm.ir.transform.Pass:
+    """Annotate the TIR func with the buffers to perform layout rewrite
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+    """
+    return _ffi_api.AnnotateLayoutRewriteBuffers()
+
+def SplitPreProc() -> tvm.ir.transform.Pass:
+    """Split the preproc block into a separate tir function
+
+    Returns
+    -------
+    ret: tvm.ir.transform.Pass
+    """
+    return _ffi_api.SplitPreProc()
 
 def _wrap_class_function_pass(pass_cls, pass_info):
     """Wrap a python class as function pass"""

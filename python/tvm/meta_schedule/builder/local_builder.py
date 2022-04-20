@@ -235,9 +235,12 @@ def default_build(mod: IRModule, target: Target, _params: Optional[Dict[str, NDA
     """
     # pylint: disable=import-outside-toplevel
     from tvm.driver import build as tvm_build
-
+    import tvm
     # pylint: enable=import-outside-toplevel
-    return tvm_build(mod, target=target)
+    with tvm.transform.PassContext(
+            config={"tir.add_lower_pass": [(0, tvm.tir.transform.RemoveWeightLayoutRewriteBlock())]}
+    ):
+        return tvm_build(mod, target=target)
 
 
 @register_func("meta_schedule.builder.default_export")

@@ -161,21 +161,6 @@ Block MakeCacheStage(const BufferRegion& cache_region, CacheStageInfo* info,
 }
 
 /*!
- * \brief Recalculate the `affine_binding` flag of a specifc block
- * \param block_sref The sref to the specific block
- */
-bool CalculateAffineFlag(const ScheduleState& self, const StmtSRef& block_sref) {
-  if (block_sref->parent == nullptr) {
-    return true;
-  }
-  arith::Analyzer analyzer;
-  StmtSRef parent_sref = GetRef<StmtSRef>(block_sref->parent);
-  return IsAffineBinding(/*realize=*/GetBlockRealize(self, block_sref),
-                         /*loop_var_ranges=*/LoopDomainOfSRefTreePath(parent_sref),
-                         /*analyzer=*/&analyzer);
-}
-
-/*!
  * \brief Insert the cache_read/cache_write stage into the specific position
  * \param stmt A sequence of statements or a single statement that the new stage is inserted in
  * \param pos The position where the cache stage is inserted

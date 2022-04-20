@@ -602,6 +602,17 @@ void CheckAffineBinding(const ScheduleState& self, Block block) {
   CheckPartialAffineBinding(self, std::move(block), NullOpt);
 }
 
+bool CalculateAffineFlag(const ScheduleState& self, const StmtSRef& block_sref) {
+  if (block_sref->parent == nullptr) {
+    return true;
+  }
+  arith::Analyzer analyzer;
+  StmtSRef parent_sref = GetRef<StmtSRef>(block_sref->parent);
+  return IsAffineBinding(/*realize=*/GetBlockRealize(self, block_sref),
+                         /*loop_var_ranges=*/LoopDomainOfSRefTreePath(parent_sref),
+                         /*analyzer=*/&analyzer);
+}
+
 Map<Var, Range> LoopDomainOfSRefTreePath(const StmtSRef& low_inclusive,
                                          const Optional<StmtSRef>& high_exclusive,
                                          const runtime::StorageScope& extra_relax_scope) {

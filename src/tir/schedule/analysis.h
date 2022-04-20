@@ -232,6 +232,12 @@ bool IsAffineBinding(const BlockRealize& realize, const Map<Var, Range>& loop_va
 void CheckAffineBinding(const ScheduleState& self, Block block);
 
 /*!
+ * \brief Recalculate the `affine_binding` flag of a specifc block
+ * \param block_sref The sref to the specific block
+ */
+bool CalculateAffineFlag(const ScheduleState& self, const StmtSRef& block_sref);
+
+/*!
  * \brief Check whether a block has an affine binding under the high exclusive sref node,
  * throw an exception if the block does not have an affine binding.
  * \param self The schedule state
