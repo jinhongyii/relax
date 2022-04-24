@@ -111,7 +111,9 @@ logging.getLogger("tvm.meta_schedule").setLevel(logging.DEBUG)
 ARGS = _parse_args()
 
 
-def apply_opt_before_tuning(relay_mod: IRModule, params: Dict[str, runtime.NDArray]):
+def apply_opt_before_tuning(
+    relay_mod: IRModule, params: Dict[str, runtime.NDArray], target: Target
+):
     with transform.PassContext(opt_level=3):
         main_func = relay_mod["main"]
         bind_main_func = relay.build_module.bind_params_by_name(main_func, params)
@@ -123,7 +125,7 @@ def apply_opt_before_tuning(relay_mod: IRModule, params: Dict[str, runtime.NDArr
         relay_mod = relay.transform.AlterOpLayout()(relay_mod)
         relay_mod = relay.transform.FoldConstant()(relay_mod)
 
-        relax_mod = relay_translator.from_relay(relay_mod["main"])
+        relax_mod = relay_translator.from_relay(relay_mod["main"], target=target)
         relax_mod = relax.transform.AnnotateTIROpPattern()(relax_mod)
         relax_mod = relax.transform.FuseOps()(relax_mod)
         relax_mod = relax.transform.FuseTIR()(relax_mod)
@@ -219,8 +221,12 @@ def main():
     )
 
     # translate the ResNet model from Relay to Relax
-    relax_mod_w_opt = apply_opt_before_tuning(relay_mod=relay_mod, params=params)
-    relax_mod_wo_opt = relay_translator.from_relay(relay_mod["main"])
+    relax_mod_w_opt = apply_opt_before_tuning(
+        relay_mod=relay_mod, params=params, target=ARGS.target
+    )
+    relax_mod_wo_opt = relay_translator.from_relay(
+        relay_mod["main"], target=ARGS.target, opt_level=0
+    )
     assert isinstance(relax_mod_w_opt, tvm.IRModule)
     assert isinstance(relax_mod_wo_opt, tvm.IRModule)
 
@@ -240,7 +246,6 @@ def main():
                 max_workers=ARGS.rpc_workers,
             ),
             database=database,
-            task_name=task_name,
             work_dir=work_dir,
             num_threads=os.cpu_count(),
         )
