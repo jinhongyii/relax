@@ -39,9 +39,7 @@ class MetaScheduleAHB {
       BaseFunc func = p.second;
       BaseFunc newfunc = func;
       if (func->IsInstance<tir::PrimFuncNode>()) {
-        auto processed_func = WithAttr(Downcast<tir::PrimFunc>(func), "global_symbol", String
-                                       ("main"));
-        IRModule tir_mod(Map<GlobalVar, BaseFunc>({{GlobalVar("main"), processed_func}}));
+        IRModule tir_mod(Map<GlobalVar, BaseFunc>({{gv, func}}));
         ObjectRef res = ahb->Query(gv->name_hint, mod_, target_, Array<IRModule>{tir_mod});
         // replace the tir func only when the schedule is found in tuning database.
         if (res.defined()) {
