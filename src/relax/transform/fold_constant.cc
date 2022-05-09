@@ -199,13 +199,29 @@ class ConstantFolder : public ExprMutator {
       func_build_cache_;
 };
 
+class ConstantEliminator:public  ExprMutator{
+ public:
+  static Expr EliminateConstantBinding(const Expr& e){
+    ConstantEliminator eliminator;
+    return eliminator(e);
+  }
+ private:
+  void VisitBinding_(const VarBindingNode* op) final{
+    if (op->value->IsInstance<ConstantNode>()) {
+      return ;
+    }
+    ExprMutator::VisitBinding_(op);
+  }
+  
+};
+
 namespace transform {
 
 Pass FoldConstant() {
   runtime::TypedPackedFunc<Function(Function, IRModule, PassContext)> pass_func =
       [=](Function f, IRModule m, PassContext pc) {
         ConstantFolder folder(m);
-        return Downcast<Function>(folder(f));
+        return Downcast<Function>(ConstantEliminator::EliminateConstantBinding(folder(f)));
       };
   return CreateFunctionPass(pass_func, 0, "FoldConstant", {});
 }
