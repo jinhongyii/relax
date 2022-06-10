@@ -789,6 +789,16 @@ class LayoutInfo : public ObjectRef {
 Optional<LayoutInfo> GetTensorizeLayoutInfo(const tir::ScheduleState& self,
                                             const tir::StmtSRef& block_sref,
                                             const tir::PrimFunc& desc_func);
+/******** Loop properties ********/
+/*!
+ * \brief Check the loop starts with zero.
+ * \param self The schedule state
+ * \param loop_sref The StmtSRef that points to the loop to be checked
+ * \param analyzer The arithmetic analyzer
+ * \throw ScheduleError If the loop doesn't starts with zero.
+ */
+void CheckLoopStartsWithZero(const ScheduleState& self, const StmtSRef& loop_sref,
+                             arith::Analyzer* analyzer);
 
 }  // namespace tir
 }  // namespace tvm

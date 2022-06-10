@@ -233,49 +233,10 @@ class Target(Object):
         target_is_dict_key : Bool
             When the type of target is dict, whether Target is the key (Otherwise the value)
         """
-        # Convert target to Array<Target>, but not yet accounting for any host.
-        raw_targets = Target.canon_multi_target(target)
-        assert raw_targets is not None
-        # Convert host to Target, if given.
-        target_host = Target.canon_target(target_host)
-        if target_host is not None:
-            warnings.warn(
-                "target_host parameter is going to be deprecated. "
-                "Please pass in tvm.target.Target(target, host=target_host) instead."
-            )
-            # Make sure the (canonical) host is captured in all the (canonical) targets.
-            raw_targets = convert([tgt.with_host(target_host) for tgt in raw_targets])
-        return raw_targets
-
-    @staticmethod
-    def canon_target_map_and_host(target_map, target_host=None):
-        """Returns target_map as a map from TVM Target's in canonical form to IRModules. The keys
-        of the input target_map can be in any form recognized by Target.canon_target.
-        Similarly, if given, target_host can be in any form recognized by
-        Target.canon_target. The final target_map keys will capture the target_host in
-        canonical form. Also returns the target_host in canonical form."""
-        if target_host is not None:
-            # warnings.warn(
-            #     "target_host parameter is going to be deprecated. "
-            #     "Please pass in tvm.target.Target(target, host=target_host) instead."
-            # )
-            target_host = Target.canon_target(target_host)
-        new_target_map = {}
-        for tgt, mod in target_map.items():
-            tgt = Target.canon_target(tgt)
-            assert tgt is not None
-            if target_host is not None:
-                tgt = tgt.with_host(target_host)
-            # In case the first target already has a host, extract it here.
-            target_host = tgt.host
-            new_target_map[tgt] = mod
-        return new_target_map, target_host
-
-    @staticmethod
-    def target_or_current(target):
-        """Returns target, or the current target in the environment if target is None"""
-        if target is None:
-            target = Target.current()
+        if isinstance(target, (dict, str)):
+            target = convert(target)
+        if isinstance(host, (dict, str)):
+            host = convert(host)
         if target is None:
             assert host is None, "Target host is not empty when target is empty."
             return target, host
@@ -406,7 +367,7 @@ def micro(model="unknown", options=None):
     opts = _merge_opts(
         MICRO_SUPPORTED_MODELS[model] + [f"-model={model}"],
         options,
-    )
+        )
 
     # NOTE: in the future, the default micro target will be LLVM except when
     # external dependencies are present.
@@ -695,9 +656,9 @@ def hexagon(cpu_ver="v66", **kwargs):
 
             # Regex match for allowed cpus
             valid_cpu_str_regex = (
-                r"(?P<pre>--.*\s)?(--m)?"
-                + r"(?P<base_version>v6[25678])(?P<sub_version>[a-z])?"
-                + r"(?P<l2_size>_[0-9]+)?(?P<rev>_rev[0-9])?\s?(?P<post>--.*)?"
+                    r"(?P<pre>--.*\s)?(--m)?"
+                    + r"(?P<base_version>v6[25678])(?P<sub_version>[a-z])?"
+                    + r"(?P<l2_size>_[0-9]+)?(?P<rev>_rev[0-9])?\s?(?P<post>--.*)?"
             )
             m = re.match(valid_cpu_str_regex, sim_options.lower())
             if not m:
@@ -706,13 +667,13 @@ def hexagon(cpu_ver="v66", **kwargs):
             # Parse options into correct order
             cpu_attr = {x: str(m.groupdict()[x] or "") for x in m.groupdict()}
             sim_options = (
-                cpu_attr["base_version"]
-                + cpu_attr["sub_version"]
-                + cpu_attr["l2_size"]
-                + cpu_attr["rev"]
-                + " "
-                + cpu_attr["pre"]
-                + cpu_attr["post"]
+                    cpu_attr["base_version"]
+                    + cpu_attr["sub_version"]
+                    + cpu_attr["l2_size"]
+                    + cpu_attr["rev"]
+                    + " "
+                    + cpu_attr["pre"]
+                    + cpu_attr["post"]
             )
 
         return sim_cpu + " " + validate_hvx_length(hvx, sim_options)

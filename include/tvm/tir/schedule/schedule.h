@@ -569,7 +569,11 @@ class ScheduleNode : public runtime::Object {
    * \param block_sref The block sref that refers to the block to be transformed
    * \param affine_index_map The transformation to apply.
    */
-  virtual void TransformBlockLayout(const BlockRV& block_rv, const IndexMap& index_map) = 0;
+  virtual void TransformBlockLayout(const BlockRV& block_rv, const IndexMap& index_map) = 0;\
+ 
+  virtual void SetAxisSeparator(const BlockRV& block_rv, int buffer_index,
+                       BufferIndexType buffer_index_type,
+                       const Array<IntImm>& axis_separators) = 0;
 
   /******** Schedule: Misc ********/
   /*! \brief A no-op that marks the start of postprocessing phase of scheduling */
