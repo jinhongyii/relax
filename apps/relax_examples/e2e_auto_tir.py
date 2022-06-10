@@ -29,6 +29,8 @@ from tvm.meta_schedule.testing.relay_workload import get_network
 from tvm.meta_schedule.testing.custom_builder_runner import run_module_via_rpc
 from tvm.relax.testing import relay_translator
 from tvm.target.target import Target
+from bert_rewrite import rewrite_reshape_gelu
+
 
 
 def _parse_args():
@@ -85,21 +87,21 @@ def _parse_args():
         parsed.alloc_repeat = 3
     else:
         parsed.alloc_repeat = 1
-    if parsed.rpc_host and parsed.rpc_port and parsed.rpc_key:
-        parsed.rpc_config = ms.runner.RPCConfig(
-            tracker_host=parsed.rpc_host,
-            tracker_port=parsed.rpc_port,
-            tracker_key=parsed.rpc_key,
-            session_timeout_sec=180,
-        )
-        parsed.workers = parsed.rpc_config.count_num_servers(allow_missing=False)
-    else:
-        # check all rpc configs are None
-        assert (
-            (parsed.rpc_host is None) and (parsed.rpc_port is None) and (parsed.rpc_key is None)
-        ), "Please set all 'rpc_host', 'rpc_port' and 'rpc_key' to use PRC server"
-        parsed.rpc_config = None
-        parsed.workers = 1
+    # if parsed.rpc_host and parsed.rpc_port and parsed.rpc_key:
+    #     parsed.rpc_config = ms.runner.RPCConfig(
+    #         tracker_host=parsed.rpc_host,
+    #         tracker_port=parsed.rpc_port,
+    #         tracker_key=parsed.rpc_key,
+    #         session_timeout_sec=180,
+    #     )
+    #     parsed.workers = parsed.rpc_config.count_num_servers(allow_missing=False)
+    # else:
+    #     # check all rpc configs are None
+    #     assert (
+    #         (parsed.rpc_host is None) and (parsed.rpc_port is None) and (parsed.rpc_key is None)
+    #     ), "Please set all 'rpc_host', 'rpc_port' and 'rpc_key' to use PRC server"
+    parsed.rpc_config = None
+    parsed.workers = 1
     return parsed
 
 
@@ -116,15 +118,21 @@ def apply_opt_before_tuning(
         bind_main_func = relay.build_module.bind_params_by_name(main_func, params)
         relay_mod = IRModule.from_expr(bind_main_func)
         relay_mod = relay.transform.SimplifyInference()(relay_mod)
+        relay_mod = relay.transform.EliminateCommonSubexpr()(relay_mod)
         relay_mod = relay.transform.FoldConstant()(relay_mod)
         relay_mod = relay.transform.FoldScaleAxis()(relay_mod)
+        relay_mod = relay.transform.SimplifyExpr()(relay_mod)
+        relay_mod = relay.transform.CanonicalizeCast()(relay_mod)
         relay_mod = relay.transform.CanonicalizeOps()(relay_mod)
         relay_mod = relay.transform.AlterOpLayout()(relay_mod)
         relay_mod = relay.transform.FoldConstant()(relay_mod)
 
         relax_mod = relay_translator.from_relay(relay_mod["main"], target=target)
+        print(relax_mod.script())
+
         relax_mod = relax.transform.AnnotateTIROpPattern()(relax_mod)
         relax_mod = relax.transform.FuseOps()(relax_mod)
+        # print(relax_mod.script())
         relax_mod = relax.transform.FuseTIR()(relax_mod)
     return relax_mod
 
@@ -161,18 +169,28 @@ def get_runner():
 
 
 def main():
-    relay_mod, params, (input_name, input_shape, input_dtype) = get_network(
-        ARGS.workload,
-        ARGS.input_shape,
-        cache_dir=ARGS.cache_dir,
-    )
-    print(f"Workload: {ARGS.workload}")
-    print(f"  input_name: {input_name}")
-    print(f"  input_shape: {input_shape}")
-    print(f"  input_dtype: {input_dtype}")
+
+    with open("models/bert_large.json", "r") as fi:
+        relay_mod = tvm.ir.load_json(fi.read())
+    with open("models/bert_large.params", "rb") as fi:
+        params = relay.load_param_dict(fi.read())
+    relay_mod = rewrite_reshape_gelu(relay_mod)
+
+    input_dtype = "int64"
+    input_shape = (8, 128)
+    # relay_mod, params, (input_name, input_shape, input_dtype) = get_network(
+    #     ARGS.workload,
+    #     ARGS.input_shape,
+    #     cache_dir=ARGS.cache_dir,
+    # )
+    # print(f"Workload: {ARGS.workload}")
+    # print(f"  input_name: {input_name}")
+    # print(f"  input_shape: {input_shape}")
+    # print(f"  input_dtype: {input_dtype}")
 
     # translate the ResNet model from Relay to Relax
     relax_mod = apply_opt_before_tuning(relay_mod, params, target=ARGS.target)
+    # print(relax_mod.script())
     assert isinstance(relax_mod, tvm.IRModule)
 
     executable = ms.tune_relax(
@@ -184,27 +202,31 @@ def main():
             max_trials_per_task=ARGS.num_trials,
             max_trials_global=ARGS.num_trials,
         ),
-        runner=get_runner(),
+        runner=ms.runner.LocalRunner(),
         work_dir=ARGS.work_dir,
         num_threads=os.cpu_count(),
     )
 
-    if input_dtype.startswith("float"):
-        input_data = [np.random.uniform(size=input_shape).astype(input_dtype)]
-    else:
-        input_data = [np.random.randint(low=0, high=10000, size=input_shape, dtype=input_dtype)]
-
+    inputs = (
+        np.random.randint(high=100, size=input_shape, dtype=input_dtype),
+        np.random.randint(high=100, size=input_shape, dtype=input_dtype),
+        np.random.randint(high=100, size=input_shape, dtype=input_dtype),
+    )
+    # if input_dtype.startswith("float"):
+    #     input_data = [np.random.uniform(size=input_shape).astype(input_dtype)]
+    # else:
+    #     input_data = [np.random.randint(low=0, high=10000, size=input_shape, dtype=input_dtype)]
     if ARGS.rpc_config:
         run_module_via_rpc(
             rpc_config=ARGS.rpc_config,
             lib=executable.mod,
             dev_type=ARGS.target.kind.name,
-            args=input_data,
+            args=inputs,
             continuation=f_measurement,
         )
     else:
         dev = tvm.device(ARGS.target.kind.name)
-        input_data = [runtime.ndarray.array(arg, dev) for arg in input_data]
+        input_data = [runtime.ndarray.array(arg, dev) for arg in inputs]
         f_measurement(executable.mod, dev, *input_data)
 
 

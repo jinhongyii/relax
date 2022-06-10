@@ -33,7 +33,13 @@ tir::PrimFunc AnnotateOpPattern(tir::PrimFunc f) {
   if (f->HasNonzeroAttr("op_pattern")) {
     return f;
   } else {
-    relay::OpPatternKind kind = AnalyzeOpPatternKind(f);
+    relay::OpPatternKind kind;
+    if (std::string(Downcast<String>(f->GetAttr("global_symbol", String("")))).find("take") ==
+        std::string::npos) {
+      kind = AnalyzeOpPatternKind(f);
+    } else {
+      kind = relay::kBroadcast;
+    }
     return WithAttr(std::move(f), "op_pattern", Integer(static_cast<int>(kind)));
   }
 }
