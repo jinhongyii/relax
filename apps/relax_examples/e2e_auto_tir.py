@@ -22,7 +22,7 @@ from typing import Dict
 import numpy as np  # type: ignore
 
 import tvm
-from tvm import relay, relax, runtime, transform
+from tvm import relay, relax, runtime, transform, tir
 from tvm.ir.module import IRModule
 from tvm import meta_schedule as ms
 from tvm.meta_schedule.testing.relay_workload import get_network
@@ -30,7 +30,17 @@ from tvm.meta_schedule.testing.custom_builder_runner import run_module_via_rpc
 from tvm.relax.testing import relay_translator
 from tvm.target.target import Target
 from bert_rewrite import rewrite_reshape_gelu
+from tvm.meta_schedule import schedule_rule as M
+from tvm.meta_schedule import postproc, extract_task_from_relax
+from tvm.relax.transform import MetaScheduleApplyHistoryBest
+from tvm.ir.transform import PassContext
+from tvm.relax.vm import build as relax_build
 
+from tvm.meta_schedule.tune import (
+    tune_extracted_tasks,
+    TuneConfig,
+)
+import tir_tensor_intrin
 
 
 def _parse_args():
@@ -87,21 +97,19 @@ def _parse_args():
         parsed.alloc_repeat = 3
     else:
         parsed.alloc_repeat = 1
-    # if parsed.rpc_host and parsed.rpc_port and parsed.rpc_key:
-    #     parsed.rpc_config = ms.runner.RPCConfig(
-    #         tracker_host=parsed.rpc_host,
-    #         tracker_port=parsed.rpc_port,
-    #         tracker_key=parsed.rpc_key,
-    #         session_timeout_sec=180,
-    #     )
-    #     parsed.workers = parsed.rpc_config.count_num_servers(allow_missing=False)
-    # else:
-    #     # check all rpc configs are None
-    #     assert (
-    #         (parsed.rpc_host is None) and (parsed.rpc_port is None) and (parsed.rpc_key is None)
-    #     ), "Please set all 'rpc_host', 'rpc_port' and 'rpc_key' to use PRC server"
-    parsed.rpc_config = None
-    parsed.workers = 1
+    if parsed.rpc_host and parsed.rpc_port and parsed.rpc_key:
+        parsed.rpc_config = ms.runner.RPCConfig(
+            tracker_host=parsed.rpc_host,
+            tracker_port=parsed.rpc_port,
+            tracker_key=parsed.rpc_key,
+            session_timeout_sec=180,
+        )
+        parsed.workers = parsed.rpc_config.count_num_servers(allow_missing=False)
+    else:
+        # check all rpc configs are None
+        assert (
+            (parsed.rpc_host is None) and (parsed.rpc_port is None) and (parsed.rpc_key is None)
+        ), "Please set all 'rpc_host', 'rpc_port' and 'rpc_key' to use PRC server"
     return parsed
 
 
@@ -128,12 +136,10 @@ def apply_opt_before_tuning(
         relay_mod = relay.transform.FoldConstant()(relay_mod)
 
         relax_mod = relay_translator.from_relay(relay_mod["main"], target=target)
-        print(relax_mod.script())
-
         relax_mod = relax.transform.AnnotateTIROpPattern()(relax_mod)
         relax_mod = relax.transform.FuseOps()(relax_mod)
-        # print(relax_mod.script())
         relax_mod = relax.transform.FuseTIR()(relax_mod)
+        # relax_mod = tir.transform.Simplify()(relax_mod)
     return relax_mod
 
 
@@ -167,6 +173,23 @@ def get_runner():
 
     return runner
 
+def check_params_tensorcore_compatible(prim_func):
+    params = prim_func.params
+    buffer_map = prim_func.buffer_map
+    buffers = [buffer_map[param] for param in params[:2]]
+    for buffer in buffers:
+        if buffer.shape[-1] % 16 != 0 or buffer.shape[-2] % 16 != 0:
+            return False
+    return True
+
+def should_use_memhammer(task):
+    mod = task.dispatched[0]
+    global_var = mod.get_global_vars()[0]
+    task_name = global_var.name_hint
+    if "dense" in task_name or "batch_matmul" in task_name:
+        prim_func = mod[global_var]
+        return check_params_tensorcore_compatible(prim_func)
+
 
 def main():
 
@@ -190,27 +213,139 @@ def main():
 
     # translate the ResNet model from Relay to Relax
     relax_mod = apply_opt_before_tuning(relay_mod, params, target=ARGS.target)
-    # print(relax_mod.script())
     assert isinstance(relax_mod, tvm.IRModule)
 
-    executable = ms.tune_relax(
-        mod=relax_mod,
-        target=ARGS.target,
-        config=ms.TuneConfig(
-            strategy="evolutionary",
-            num_trials_per_iter=64,
-            max_trials_per_task=ARGS.num_trials,
-            max_trials_global=ARGS.num_trials,
-        ),
-        runner=ms.runner.LocalRunner(),
-        work_dir=ARGS.work_dir,
-        num_threads=os.cpu_count(),
+
+    def sch_rules_tensor_core():
+        return [
+            M.MultiLevelTiling(
+                structure="SSSRRSRS",
+                tile_binds=["blockIdx.x", "blockIdx.y", "threadIdx.y"],
+                use_tensor_core=True,
+                max_innermost_factor=4,
+                vector_load_lens=[1, 2, 4, 8],
+                reuse_read=M.ReuseType(
+                    req="must",
+                    levels=[4],
+                    scope="shared.dyn",
+                ),
+                reuse_write=M.ReuseType(
+                    req="no",
+                    levels=[3],
+                    scope="shared.dyn",
+                ),
+            ),
+            M.AutoInline(
+                into_producer=True,
+                into_consumer=True,
+                inline_const_tensor=True,
+                disallow_if_then_else=False,
+                require_injective=False,
+                require_ordered=False,
+                disallow_op=None,
+            ),
+            M.AutoInline(
+                into_producer=True,
+                into_consumer=True,
+                inline_const_tensor=True,
+                disallow_if_then_else=False,
+                require_injective=False,
+                require_ordered=False,
+                disallow_op=None,
+            ),
+            M.CrossThreadReduction(thread_extents=[4, 8, 16, 32, 64, 128, 256, 512]),
+            M.ParallelizeVectorizeUnroll(
+                max_jobs_per_core=-1,  # disable parallelize
+                max_vectorize_extent=-1,  # disable vectorize
+                unroll_max_steps=[0, 16, 64, 512, 1024],
+                unroll_explicit=True,
+            ),
+        ]
+
+
+    def postprocs_tensor_core():
+        return [
+            postproc.RewriteCooperativeFetch(),
+            postproc.RewriteUnboundBlock(),
+            postproc.RewriteParallelVectorizeUnroll(),
+            postproc.RewriteReductionBlock(),
+            postproc.RewriteTensorCore(),
+            postproc.VerifyGPUCode(),
+        ]
+
+    search_config = TuneConfig(
+        num_trials_per_iter=64,
+        max_trials_per_task=1000,
+        max_trials_global=ARGS.num_trials,
+        search_strategy_config={
+            "population_size": 2048,
+            "init_measured_ratio": 0.2,
+            "init_min_unmeasured": 50,
+            "genetic_num_iters": 3,
+            "genetic_mutate_prob": 0.85,
+            "genetic_max_fail_count": 10,
+            "eps_greedy": 0.05,
+        },
     )
 
+    tasks = extract_task_from_relax(relax_mod, target=ARGS.target, params=params)
+
+
+    # run tuning tasks
+    print("Tuning...")
+    memhammer_tasks = []
+    other_tasks = []
+    for tsk in tasks:
+        if "softmax" in tsk.task_name:
+            print(tsk.dispatched[0].script())
+        if should_use_memhammer(tsk):
+            print(tsk.task_name, "memhammer")
+            memhammer_tasks.append(tsk)
+        else:
+            print(tsk.task_name, "non-memhammer")
+            other_tasks.append(tsk)
+    # sys.exit(0)
+
+    database = tune_extracted_tasks(
+        other_tasks,
+        config=search_config,
+        # use default CUDA rules
+        work_dir=ARGS.work_dir,
+        runner=get_runner(),
+    )
+
+    database = tune_extracted_tasks(
+        memhammer_tasks,
+        config=search_config,
+        sch_rules=sch_rules_tensor_core,
+        postprocs=postprocs_tensor_core,
+        work_dir=ARGS.work_dir,
+        database=database,
+        runner=get_runner(),
+    )
+
+
+    with PassContext(opt_level=3):
+        relax_mod = MetaScheduleApplyHistoryBest(database, ARGS.target)(relax_mod)
+        executable = relax_build(relax_mod, target=ARGS.target)
+    # executable = ms.tune_relax(
+    #     mod=relax_mod,
+    #     target=ARGS.target,
+    #     config=ms.TuneConfig(
+    #         strategy="evolutionary",
+    #         num_trials_per_iter=64,
+    #         max_trials_per_task=ARGS.num_trials,
+    #         max_trials_global=ARGS.num_trials,
+    #     ),
+    #     runner=ms.runner.LocalRunner(),
+    #     work_dir=ARGS.work_dir,
+    #     num_threads=os.cpu_count(),
+    # )
+
     inputs = (
-        np.random.randint(high=100, size=input_shape, dtype=input_dtype),
-        np.random.randint(high=100, size=input_shape, dtype=input_dtype),
-        np.random.randint(high=100, size=input_shape, dtype=input_dtype),
+        np.random.randint(100, size=input_shape, dtype=input_dtype),
+        np.random.randint(100, size=input_shape, dtype=input_dtype),
+        np.random.randint(100, size=input_shape, dtype=input_dtype),
     )
     # if input_dtype.startswith("float"):
     #     input_data = [np.random.uniform(size=input_shape).astype(input_dtype)]
