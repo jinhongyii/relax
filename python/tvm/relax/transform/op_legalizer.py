@@ -16,16 +16,22 @@
 # under the License.
 from typing import List
 import math
+from black import out
 
 import tvm
+
 from tvm import ir, te, topi
 from tvm.ir import Attrs
 from tvm.ir.module import IRModule
+
+
 
 from ..analysis import remove_all_unused
 from ..expr import Call, Expr, Function, Tuple, TupleGetItem
 from ..expr_functor import mutator, PyExprMutator
 from ..block_builder import BlockBuilder
+
+
 
 
 def _nn_conv2d(bb: BlockBuilder, args: List[Expr], attrs: Attrs, output_shape: Expr):
@@ -126,9 +132,57 @@ def _nn_layer_norm(bb: BlockBuilder, args: List[Expr], attrs: Attrs, output_shap
     return bb.call_te(layer_norm, args[0], args[1], args[2], axis=attrs.axis, eps=attrs.epsilon)
 
 
-def _nn_matmul(bb: BlockBuilder, args: List[Expr], attrs: Attrs, output_shape: Expr):
+def _nn_matmul(bb: BlockBuilder, args: List[Expr], attrs: Attrs, output_shape: Expr):   
+    from tvm.script.ir_builder import IRBuilder
+    from tvm.script.ir_builder import ir as I
+    from tvm.script.ir_builder import relax as R
+    from tvm.script.ir_builder import tir as T
+    from tvm.tir import StringImm, cutlass_gemm
+    from tvm import relax
     a = args[0]
     b = args[1]
+    a_shape = a.shape.values
+    b_shape = b.shape.values
+    if len(a_shape)==len(b_shape):
+        if len(a_shape) == 2:
+            c_shape = (a_shape[0], b_shape[1])
+            m = a_shape[0]
+            k = a_shape[1]
+            n = b_shape[1]
+            with IRBuilder() as ib:  # pylint: disable=invalid-name
+                with T.prim_func():
+                    T.func_name("matmul")
+                    T.func_attr(
+                        {
+                            "cutlass_codegen": 1,
+                            "op_pattern": 4,
+                            #"global_symbol": GLOBAL_SYMBOL,
+                        }
+                    )
+                    A = T.arg("A", T.buffer_decl(a_shape, "float32")
+                                )  # pylint: disable=invalid-name
+                    B = T.arg("B", T.buffer_decl(b_shape, "float32")
+                                )  # pylint: disable=invalid-name
+                    C = T.arg("C", T.buffer_decl(c_shape, "float32")
+                                )  # pylint: disable=invalid-name
+                    with T.block("cutlass"):
+                        T.reads(A[0:m, 0:k], B[0:k, 0:n])
+                        T.writes(C[0:m, 0:n])
+                        T.evaluate(
+                            cutlass_gemm(
+                                A.data,
+                                B.data,
+                                C.data,
+                                StringImm(A.dtype),
+                                StringImm(B.dtype),
+                                StringImm(C.dtype),
+                                transpose_a=False,
+                                transpose_b=False,
+                                transpose_c=False,
+                            )
+                        )
+            new_func_var = bb.add_func(ib.get(), "matmul")
+            return bb.emit(relax.call_tir(new_func_var, [a, b], shape=output_shape, dtype="float32"))
     a_shape = list(a.shape_)
     b_shape = list(b.shape_)
 
@@ -169,8 +223,6 @@ def _nn_matmul(bb: BlockBuilder, args: List[Expr], attrs: Attrs, output_shape: E
                 if not b_appended:
                     b_indices.append(idx_spatial[-1])
 
-                print(a_indices)
-                print(b_indices)
                 return a(*a_indices) * b(*b_indices)
 
             return te.sum(multiply_compute(k), axis=k)

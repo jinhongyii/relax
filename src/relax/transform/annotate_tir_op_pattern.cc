@@ -34,6 +34,11 @@ tir::PrimFunc AnnotateOpPattern(tir::PrimFunc f) {
     return f;
   } else {
     relay::OpPatternKind kind = AnalyzeOpPatternKind(f);
+    std::string func_name = Downcast<String>(f->GetAttr("global_symbol", String("")));
+    if(func_name.find("transpose")!=std::string::npos || func_name.find("reshape")
+                                                                       !=std::string::npos){
+      kind = relay::OpPatternKind::kElemWise;
+    }
     return WithAttr(std::move(f), "op_pattern", Integer(static_cast<int>(kind)));
   }
 }

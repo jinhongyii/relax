@@ -245,7 +245,7 @@ Pass CutlassCodegen() {
       GlobalVar gv = kv.first;
       BaseFunc base_func = kv.second;
       if (const tir::PrimFuncNode* pf = base_func.as<tir::PrimFuncNode>()) {
-        if (Optional<Integer> _ = pf->attrs.GetAttr<Integer>(kCutlassCodegen)) {
+        if (Optional<String> _ = pf->attrs.GetAttr<String>(kCutlassKernel)) {
           functions.Set(gv, CodegenWithCutlass(pf, gv->name_hint));
           continue;
         }

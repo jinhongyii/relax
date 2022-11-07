@@ -284,6 +284,8 @@ class TorchFXTranslator:
         return x.shape[idx].value
 
     def _getattr(self, node: fx.node.Node) -> relax.Var:
+        if isinstance(self.env[node.args[0]], relax.Var) and node.args[1] == "dtype":
+            return self.env[node.args[0]].checked_type.dtype
         return getattr(self.env[node.args[0]], node.args[1])
 
     def _getitem(self, node: fx.node.Node) -> relax.Var:
@@ -493,7 +495,10 @@ class TorchFXTranslator:
         args = self.retrive_args(node)
         infer_idx = -1
         prod = 1
-        new_shape = list(args[1:])
+        if isinstance(args[1], tuple):
+            new_shape = list(args[1])
+        else:
+            new_shape = list(args[1:])
         for i in range(len(new_shape)):
             if new_shape[i] == -1:
                 infer_idx = i
@@ -559,6 +564,16 @@ class TorchFXTranslator:
 
         return self.bb.emit(relax.op.nn.layer_norm(x, gamma, beta, axis=axis, epsilon=module.eps))
 
+    def _size_method(self, node: fx.node.Node) -> relax.Var:
+        shape = self.shape_of(self.env[node.args[0]])
+        if isinstance(shape, relax.ShapeExpr):
+            shape = torch.Size([int(x) for x in shape.values])
+        return shape
+
+    def _type(self, node: fx.node.Node) -> relax.Var:
+        args = self.retrive_args(node)
+        return self.bb.emit_te(topi.cast, args[0], args[1])
+
     def create_convert_map(self):
         self.convert_map = {
             # call_module
@@ -608,6 +623,8 @@ class TorchFXTranslator:
             "softmax": self._softmax,
             "view": self._view,
             "contiguous": lambda node: self.env[node.args[0]],
+            "size": self._size_method,
+            "type": self._type
         }
 
     def fetch_attr(self, model, target: str):

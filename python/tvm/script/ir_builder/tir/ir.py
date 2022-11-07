@@ -1665,6 +1665,29 @@ def _dtype_forward(func):
     return wrapped
 
 
+# def cutlass_gemm(
+#     a,
+#     b,
+#     c,
+#     dtype_a,
+#     dtype_b,
+#     dtype_c,
+#     transpose_a,
+#     transpose_b,
+#     transpose_c,
+# ):
+#     return _ffi_api.cutlass_gemm(
+#         a,
+#         b,
+#         c,
+#         dtype_a,
+#         dtype_b,
+#         dtype_c,
+#         transpose_a,
+#         transpose_b,
+#         transpose_c,
+#         None,
+#     )
 # pylint: disable=invalid-name
 
 buffer_var = ptr
@@ -1771,7 +1794,7 @@ tvm_call_packed_lowered = call_packed_lowered
 tvm_call_cpacked_lowered = call_cpacked_lowered
 TVMBackendAllocWorkspace = _op_wrapper(_tir_op.TVMBackendAllocWorkspace)
 TVMBackendFreeWorkspace = _op_wrapper(_tir_op.TVMBackendFreeWorkspace)
-
+cutlass_gemm = _op_wrapper(_tir_op.cutlass_gemm)
 
 class inline:
     """Inline function for meta-programming.
@@ -1973,4 +1996,5 @@ __all__ = [
     "broadcast",
     "ramp",
     "cast",
+    "cutlass_gemm",
 ]
