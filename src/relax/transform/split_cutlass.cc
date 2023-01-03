@@ -28,6 +28,7 @@
 #include <tvm/tir/builtin.h>
 #include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
+#include <tvm/tir/transform.h>
 
 #include "../../tir/schedule/ir_comparator.h"
 
@@ -340,9 +341,7 @@ class BlockMasker : public StmtExprMutator {
       if (!(is_cutlass_ ^ block_is_cutlass)) {
         n->body = block->body;
       } else {
-        n->body = Evaluate(0);
-        n->reads.clear();
-        n->writes.clear();
+        erased_ = true;
       }
     }
     Array<Buffer> alloc_buffers;
@@ -354,6 +353,21 @@ class BlockMasker : public StmtExprMutator {
     n->alloc_buffers = alloc_buffers;
     return Block(n);
   }
+
+  Stmt VisitStmt_(const SeqStmtNode* op) final {
+    Array<Stmt> seq;
+    for (const Stmt& s : op->seq) {
+      Stmt new_s = VisitStmt(s);
+      if (erased_) {
+        erased_ = false;
+      } else {
+        seq.push_back(new_s);
+      }
+    }
+    return SeqStmt::Flatten(seq);
+  }
+
+  bool erased_ = false;
   Map<Block, Bool> block_partition;
   std::unordered_set<Buffer, ObjectPtrHash, ObjectPtrEqual> allocs_;
   bool is_cutlass_ = false;

@@ -193,14 +193,6 @@ class test_cutlass_split_dense_relu_expected:
         T.func_attr({"global_symbol": "HGEMM"})
         # body
         # with T.block("root")
-        for v, v_1, v_2 in T.grid(16, 64, 32):
-            with T.block("dense_row_row_row"):
-                v_3, v_4, v_5 = T.axis.remap("SSR", [v, v_1, v_2])
-                T.reads()
-                T.writes()
-                with T.init():
-                    D[v_3, v_4] = T.float16(0)
-                T.evaluate(0)
         for v_6, v_7 in T.grid(16, 64):
             with T.block("root"):
                 v_8, v_9 = T.axis.remap("SS", [v_6, v_7])
@@ -288,12 +280,6 @@ class test_cutlass_split_dense_bias_relu_expected:
                 T.reads(buf__1[v_12, v_13])
                 T.writes(buf__2[v_12, v_13])
                 buf__2[v_12, v_13] = T.max(buf__1[v_12, v_13], T.float16(0))
-        for v_14, v_15 in T.grid(16, 64):
-            with T.block("exp"):
-                v_16, v_17 = T.axis.remap("SS", [v_14, v_15])
-                T.reads()
-                T.writes()
-                T.evaluate(0)
 
     @R.function
     def main(
@@ -312,26 +298,6 @@ class test_cutlass_split_dense_bias_relu_expected:
         buf_ = T.buffer_decl([16, 64], dtype="float16")
         # body
         # with T.block("root")
-        for v, v_1, v_2 in T.grid(16, 64, 32):
-            with T.block("dense_row_row_row"):
-                v_3, v_4, v_5 = T.axis.remap("SSR", [v, v_1, v_2])
-                T.reads()
-                T.writes()
-                with T.init():
-                    buf_[v_3, v_4] = T.float16(0)
-                T.evaluate(0)
-        for v_6, v_7 in T.grid(16, 64):
-            with T.block("bias"):
-                v_8, v_9 = T.axis.remap("SS", [v_6, v_7])
-                T.reads()
-                T.writes()
-                T.evaluate(0)
-        for v_10, v_11 in T.grid(16, 64):
-            with T.block("relu"):
-                v_12, v_13 = T.axis.remap("SS", [v_10, v_11])
-                T.reads()
-                T.writes()
-                T.evaluate(0)
         for v_14, v_15 in T.grid(16, 64):
             with T.block("exp"):
                 v_16, v_17 = T.axis.remap("SS", [v_14, v_15])
