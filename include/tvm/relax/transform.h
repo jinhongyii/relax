@@ -195,6 +195,15 @@ TVM_DLL Pass RunCodegen(Optional<Array<runtime::String>> target_codegens,
  */
 TVM_DLL Pass ToMixedPrecision(const DataType& out_dtype);
 
+/*!
+ * \brief Split a PrimFunc into 2 parts: the first part is a TIR PrimFunc which is
+ *        matched with some cutlass kernels, and the second part is the rest of the
+ *        original PrimFunc that is not fused with cutlass kernels.
+ *
+ * \return The Pass.
+ */
+TVM_DLL Pass SplitCutlass();
+
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm
