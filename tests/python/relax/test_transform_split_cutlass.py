@@ -308,21 +308,21 @@ class test_cutlass_split_dense_bias_relu_expected:
 
 def test_cutlass_split_dense():
     mod = GEMM
-    mod = relax.transform.SplitCutlass()(mod)
+    mod = relax.transform.SplitCallTIRByPattern()(mod)
     mod = relax.transform.RemoveUnusedFunctions()(mod)
     tvm.ir.assert_structural_equal(mod, test_cutlass_split_dense_expected)
 
 
 def test_cutlass_split_dense_relu():
     mod = GEMM_ReLU
-    mod = relax.transform.SplitCutlass()(mod)
+    mod = relax.transform.SplitCallTIRByPattern()(mod)
     mod = relax.transform.RemoveUnusedFunctions()(mod)
     tvm.ir.assert_structural_equal(mod, test_cutlass_split_dense_relu_expected)
 
 
 def test_cutlass_split_dense_bias_relu():
     mod = GEMM_bias_relu_exp
-    mod = relax.transform.SplitCutlass()(mod)
+    mod = relax.transform.SplitCallTIRByPattern()(mod)
     mod = relax.transform.RemoveUnusedFunctions()(mod)
     tvm.ir.assert_structural_equal(mod, test_cutlass_split_dense_bias_relu_expected)
 

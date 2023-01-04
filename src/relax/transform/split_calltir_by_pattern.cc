@@ -503,6 +503,7 @@ class SplitMutator : public ExprMutator {
       for (int p : arg_partition[0]) {
         args1.push_back(GetCallTIRArgs(call->args[1])[p]);
       }
+      //todo: for dynamic shape, we cannot use the buffer shape from tir
       ShapeExpr shape1(func1->buffer_map[func1->params.back()]->shape);
       GlobalVar gv1 = builder_->AddFunction(func1, "cutlass_primfunc");
       tir::Buffer intermediate_buffer = func1->buffer_map.at(func1->params.back());
@@ -528,15 +529,15 @@ class SplitMutator : public ExprMutator {
 };
 
 namespace transform {
-Pass SplitCutlass() {
+Pass SplitCallTIRByPattern() {
   runtime::TypedPackedFunc<IRModule(IRModule, PassContext)> pass_func =  //
       [=](IRModule m, PassContext pc) { return SplitMutator::Transform(m); };
   return CreateModulePass(/*pass_function=*/pass_func,   //
                           /*opt_level=*/0,               //
-                          /*pass_name=*/"SplitCutlass",  //
+                          /*pass_name=*/"SplitCallTIRByPattern",  //
                           /*required=*/{});
 }
-TVM_REGISTER_GLOBAL("relax.transform.SplitCutlass").set_body_typed(SplitCutlass);
+TVM_REGISTER_GLOBAL("relax.transform.SplitCallTIRByPattern").set_body_typed(SplitCallTIRByPattern);
 
 }  // namespace transform
 

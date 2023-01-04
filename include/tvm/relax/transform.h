@@ -202,7 +202,7 @@ TVM_DLL Pass ToMixedPrecision(const DataType& out_dtype);
  *
  * \return The Pass.
  */
-TVM_DLL Pass SplitCutlass();
+TVM_DLL Pass SplitCallTIRByPattern();
 
 }  // namespace transform
 }  // namespace relax
