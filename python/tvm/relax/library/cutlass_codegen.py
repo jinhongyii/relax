@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import inspect
 
 import tvm
 from tvm.contrib.cutlass.build import select_gemm_kernel, _get_cutlass_path
@@ -26,7 +27,9 @@ def get_graph_pattern_cutlass_code(cutlass_op, *args, **kwargs):
     pattern = "/".join(cutlass_op)
     
     if pattern.startswith("dense"):
-        return cutlass_codegen_gemm(_attr_to_list(kwargs["attr"]))
+        arg_names = inspect.getargspec(cutlass_codegen_gemm)[0]
+        print(arg_names)
+        return cutlass_codegen_gemm(*_attr_to_list(kwargs["attr"], arg_names))
     # if pattern not in GRAPH_PATTERN_CODE_LIST:
     #     raise tvm.TVMError(
     #         "Cannot find graph pattern code for cutlass op: {}".format(cutlass_op))

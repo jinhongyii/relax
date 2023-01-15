@@ -366,6 +366,18 @@ def ToMixedPrecision(out_dtype="float32") -> tvm.ir.transform.Pass:
     return _ffi_api.ToMixedPrecision(out_dtype)  # type: ignore
 
 
+def SplitCallTIRByPattern() -> tvm.ir.transform.Pass:
+    """Split a PrimFunc into 2 parts: the first part is a TIR PrimFunc which is
+       matched with some cutlass kernels, and the second part is the rest of the original
+       PrimFunc that is not fused with cutlass kernels.
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered pass for spliting calltir.
+    """
+    return _ffi_api.SplitCallTIRByPattern()
+
 def _wrap_class_function_pass(pass_cls, pass_info):
     """Wrap a python class as function pass."""
 

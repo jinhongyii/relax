@@ -16,14 +16,15 @@
 # under the License.
 
 import tvm
-from tvm import tir
+from tvm import tir, relax
 from tvm.script.ir_builder import relax as R
 from tvm.script.ir_builder import ir as I
 from tvm.script.ir_builder import IRBuilder
 from tvm.relax.transform import OperatorLegalizer
 from tvm import register_func
 
-from cutlass_codegen import get_graph_pattern_cutlass_code
+from .cutlass_codegen import get_graph_pattern_cutlass_code
+
 OP_PATTERN_LIST = list()
 OP_PATTERN_FUNC_LIST = dict()
 OP_PATTERN_VARS_LIST = dict()
@@ -236,9 +237,10 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", R.tensor((M, K), A_TYPE))  # pylint: disable=invalid-name
-                B = R.arg("B", R.tensor((K, N), B_TYPE))  # pylint: disable=invalid-name
-                C = R.nn.matmul(A, B, out_dtype=C_TYPE)
+                A = R.arg("A", relax.TensorStructInfo((M, K), A_TYPE))  # pylint: disable=invalid-name
+                B = R.arg("B", relax.TensorStructInfo((K, N), B_TYPE)
+                          )  # pylint: disable=invalid-name
+                C = R.matmul(A, B, out_dtype=C_TYPE)
                 R.func_ret_value(C)
     relax_mod = ib.get()
     relax_mod = OperatorLegalizer(relax_mod).transform()

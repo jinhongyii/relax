@@ -31,7 +31,7 @@ from tvm.script.ir_builder import ir as I
 from tvm.script.ir_builder import tir as T
 from tvm.script.ir_builder import IRBuilder
 
-import tvm.relax.cutlass.pattern
+import tvm.relax.library.pattern
 
 PKG_FILE = "/tmp/test_transform_cutlass_codegen.so"
 GLOBAL_SYMBOL = "HGEMM"
@@ -52,7 +52,7 @@ def build(mod, file_name=PKG_FILE):
     mod = relax.transform.AnnotateTIROpPattern()(mod)
     mod = relax.transform.FuseOps()(mod)
     mod = relax.transform.FuseTIR()(mod)
-    mod = relax.transform.SplitCutlass()(mod)
+    mod = relax.transform.SplitCallTIRByPattern()(mod)
     executbale = relax_build(mod, target)
     executbale.mod.export_library(file_name, cc="nvcc")
     return executbale
@@ -63,12 +63,12 @@ def constructGEMM(M, N, K):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", R.tensor((M, K), A_TYPE)
+                A = R.arg("A", tvm.relax.TensorStructInfo((M, K), A_TYPE)
                           )  # pylint: disable=invalid-name
-                B = R.arg("B", R.tensor((K, N), B_TYPE)
+                B = R.arg("B", tvm.relax.TensorStructInfo((K, N), B_TYPE)
                           )  # pylint: disable=invalid-name
                 with R.dataflow() as df:
-                    C = R.emit(R.nn.matmul(A, B, out_dtype=C_TYPE))
+                    C = R.emit(R.matmul(A, B, out_dtype=C_TYPE))
                     R.output(C)
                 (C,) = df.output_vars
                 R.func_ret_value(C)
