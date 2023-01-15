@@ -247,6 +247,10 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
     name = "dense_row_row_row_"+A_TYPE+"_"+B_TYPE+"_"+C_TYPE
     OP_PATTERN_LIST.append(name)
     OP_PATTERN_FUNC_LIST[name] = relax_mod["matmul"]
+    params = relax_mod["matmul"].params
+    M = relax_mod["matmul"].buffer_map[params[0]].shape[0]
+    N = relax_mod["matmul"].buffer_map[params[1]].shape[1]
+    K = relax_mod["matmul"].buffer_map[params[0]].shape[1]    
     OP_PATTERN_VARS_LIST[name] = [M, N, K]
     OP_PATTERN_ATTR_LIST[name] = {"typea": A_TYPE, "typeb": B_TYPE, "typec": C_TYPE, "layouta": "row", "layoutb": "row", "layoutc": "row"}
 
@@ -259,8 +263,8 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
 #         with I.ir_module() as frame:
 #             with R.function():
 #                 R.func_name("main")
-#                 A = R.arg("A", R.tensor((M, N), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.arg("B", R.tensor((1, N), B_TYPE))  # pylint: disable=invalid-name
+#                 A = R.arg("A", relax.TensorStructInfo((M, N), A_TYPE))  # pylint: disable=invalid-name
+#                 B = R.arg("B", relax.TensorStructInfo((1, N), B_TYPE))  # pylint: disable=invalid-name
 #                 C = R.add(A, B)
 #                 R.func_ret_value(C)
 #     relax_mod = ib.get()
@@ -280,8 +284,8 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
 #         with I.ir_module() as frame:
 #             with R.function():
 #                 R.func_name("main")
-#                 A = R.arg("A", R.tensor((batch, M, N), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.arg("B", R.tensor((1, N), B_TYPE))  # pylint: disable=invalid-name
+#                 A = R.arg("A", relax.TensorStructInfo((batch, M, N), A_TYPE))  # pylint: disable=invalid-name
+#                 B = R.arg("B", relax.TensorStructInfo((1, N), B_TYPE))  # pylint: disable=invalid-name
 #                 C = R.add(A, B)
 #                 R.func_ret_value(C)
 #     relax_mod = ib.get()
@@ -300,7 +304,7 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
 #         with I.ir_module() as frame:
 #             with R.function():
 #                 R.func_name("main")
-#                 A = R.arg("A", R.tensor((M, N), A_TYPE))  # pylint: disable=invalid-name
+#                 A = R.arg("A", relax.TensorStructInfo((M, N), A_TYPE))  # pylint: disable=invalid-name
 #                 B = R.nn.relu(A)
 #                 R.func_ret_value(B)
 #     relax_mod = ib.get()
@@ -322,8 +326,8 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
 #         with I.ir_module() as frame:
 #             with R.function():
 #                 R.func_name("main")
-#                 A = R.arg("A", R.tensor((batch, M, K), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.arg("B", R.tensor((K, N), B_TYPE))  # pylint: disable=invalid-name
+#                 A = R.arg("A", relax.TensorStructInfo((batch, M, K), A_TYPE))  # pylint: disable=invalid-name
+#                 B = R.arg("B", relax.TensorStructInfo((K, N), B_TYPE))  # pylint: disable=invalid-name
 #                 C = R.nn.matmul(A, B, out_dtype=C_TYPE)
 #                 R.func_ret_value(C)
 #     relax_mod = ib.get()
@@ -345,8 +349,8 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
 #         with I.ir_module() as frame:
 #             with R.function():
 #                 R.func_name("main")
-#                 A = R.arg("A", R.tensor((batch, M, K), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.arg("B", R.tensor((batch, K, N), B_TYPE))  # pylint: disable=invalid-name
+#                 A = R.arg("A", relax.TensorStructInfo((batch, M, K), A_TYPE))  # pylint: disable=invalid-name
+#                 B = R.arg("B", relax.TensorStructInfo((batch, K, N), B_TYPE))  # pylint: disable=invalid-name
 #                 C = R.nn.matmul(A, B, out_dtype=C_TYPE)
 #                 R.func_ret_value(C)
 #     relax_mod = ib.get()
@@ -1319,3 +1323,4 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
 # GRAPH_PATTERN_CODE_LIST["padding_2d_NHWC/conv2d_NHWC"] = conv2d_NHWC_codegen
 
 # GRAPH_PATTERN_CODE_LIST["copy_4d/conv2d_NHWC"] = conv2d_NHWC_codegen
+

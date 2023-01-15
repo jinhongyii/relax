@@ -63,7 +63,7 @@ def _convert_layout_str(layout):
         if layout=="row":
             return "cutlass::layout::RowMajor"
         elif layout == "col":
-            return "cutlass::layout::ColMajor"
+            return "cutlass::layout::ColumnMajor"
     raise ValueError("layout not supported")
 
 def _reverse_layout(layout):
@@ -74,8 +74,8 @@ def _reverse_layout(layout):
         return arr
     elif isinstance(layout, str):
         if layout == "cutlass::layout::RowMajor":
-            return "cutlass::layout::ColMajor"
-        elif layout == "cutlass::layout::ColMajor":
+            return "cutlass::layout::ColumnMajor"
+        elif layout == "cutlass::layout::ColumnMajor":
             return "cutlass::layout::RowMajor"
     raise ValueError("layout not supported")
 
@@ -88,7 +88,7 @@ def _attr_to_list(attr, arg_names):
 
 def cutlass_codegen_gemm(m, n, k, typea, typeb, typec, layouta, layoutb, layoutc, op_type, sm=80, bin_dir="./bin"):
     cutlass_profiler = CutlassGemmProfiler(sm, _get_cutlass_path(), bin_dir)
-    name, cutlass_op_def = select_gemm_kernel(
+    op_name, cutlass_op_def = select_gemm_kernel(
         cutlass_profiler,
         op_type,
         m,
@@ -105,8 +105,7 @@ def cutlass_codegen_gemm(m, n, k, typea, typeb, typec, layouta, layoutb, layoutc
         False,
         True,
     )
-    print(name)
-    print(cutlass_op_def)
+    op_name = "Operation_"+op_name
     typea, typeb, typec = _convert_type_str([typea, typeb, typec])    
     layouta, layoutb, layoutc =  _convert_layout_str([layouta, layoutb, layoutc])
     r_layouta, r_layoutb, r_layoutc = _reverse_layout([layouta, layoutb, layoutc])
@@ -150,8 +149,8 @@ def cutlass_codegen_gemm(m, n, k, typea, typeb, typec, layouta, layoutb, layoutc
         CHECK_EQ(C->shape[0], M);
         CHECK_EQ(C->shape[1], N);
         // Define the GEMM operation
-        using Gemm = {cutlass_op_def};
-        Gemm gemm_op;
+        {cutlass_op_def};
+        {op_name} gemm_op;
         {typec} alpha(1.0);
         {typec} beta(0.0);
         {r_layouta}::Stride::Index lda(K);

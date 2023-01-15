@@ -77,6 +77,8 @@ class CodeGenVM : public ExprFunctor<Instruction::Arg(const Expr&)> {
     for (auto& p : mod->functions) {
       if (auto* func = p.second.as<FunctionNode>()) {
         codegen.Codegen(GetRef<Function>(func));
+      } else if (auto* func = p.second.as<ExternFuncNode>()) {
+        codegen.CompileCSource(func);
       } else {
         res_mod->Add(p.first, p.second);
       }
@@ -87,7 +89,7 @@ class CodeGenVM : public ExprFunctor<Instruction::Arg(const Expr&)> {
  protected:
   size_t NewRegister() { return registers_num_++; }
   
-  Instruction::Arg VisitExpr_(const ExternFuncNode* func) {
+  void CompileCSource(const ExternFuncNode* func){
     const static constexpr char* kCSource = "c_source";
     const static constexpr char* kCSourceFmt = "c_source_fmt";
     if (Optional<String> opt_code = func->attrs.GetAttr<String>(kCSource)) {
@@ -99,8 +101,6 @@ class CodeGenVM : public ExprFunctor<Instruction::Arg(const Expr&)> {
                                        /*const_vars=*/{});
       builder_->exec()->Import(c_source_module);
     }
-    builder_->DeclareFunction(func->global_symbol, VMFuncInfo::FuncKind::kPackedFunc);
-    return builder_->GetFunction(func->global_symbol);
   }
 
   // Convert Arg value to a register, trigger copy if needed
@@ -315,7 +315,11 @@ class CodeGenVM : public ExprFunctor<Instruction::Arg(const Expr&)> {
     builder_->DeclareFunction(symbol.value(), kind);
     return builder_->GetFunction(symbol.value());
   }
-
+  
+  Instruction::Arg VisitExpr_(const ExternFuncNode* op) final {
+    builder_->DeclareFunction(op->global_symbol, VMFuncInfo::FuncKind::kPackedFunc);
+    return builder_->GetFunction(op->global_symbol);
+  }
 
   void EmitAllocStorage(const Call& call_node, RegName dst_reg) {
     // Handle args of the call
