@@ -86,6 +86,22 @@ class CodeGenVM : public ExprFunctor<Instruction::Arg(const Expr&)> {
 
  protected:
   size_t NewRegister() { return registers_num_++; }
+  
+  Instruction::Arg VisitExpr_(const ExternFuncNode* func) {
+    const static constexpr char* kCSource = "c_source";
+    const static constexpr char* kCSourceFmt = "c_source_fmt";
+    if (Optional<String> opt_code = func->attrs.GetAttr<String>(kCSource)) {
+      String sym = func->global_symbol;
+      String fmt = func->attrs.GetAttr<String>(kCSourceFmt).value_or("c");
+      String code = opt_code.value();
+      Module c_source_module =
+          codegen::CSourceModuleCreate(/*code=*/code, /*fmt=*/fmt, /*func_names=*/{sym},
+                                       /*const_vars=*/{});
+      builder_->exec()->Import(c_source_module);
+    }
+    builder_->DeclareFunction(func->global_symbol, VMFuncInfo::FuncKind::kPackedFunc);
+    return builder_->GetFunction(func->global_symbol);
+  }
 
   // Convert Arg value to a register, trigger copy if needed
   Instruction::Arg EnsureReg(Instruction::Arg arg) {
@@ -300,10 +316,6 @@ class CodeGenVM : public ExprFunctor<Instruction::Arg(const Expr&)> {
     return builder_->GetFunction(symbol.value());
   }
 
-  Instruction::Arg VisitExpr_(const ExternFuncNode* op) final {
-    builder_->DeclareFunction(op->global_symbol, VMFuncInfo::FuncKind::kPackedFunc);
-    return builder_->GetFunction(op->global_symbol);
-  }
 
   void EmitAllocStorage(const Call& call_node, RegName dst_reg) {
     // Handle args of the call
