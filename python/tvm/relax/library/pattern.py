@@ -30,9 +30,11 @@ OP_PATTERN_FUNC_LIST = dict()
 OP_PATTERN_VARS_LIST = dict()
 OP_PATTERN_ATTR_LIST = dict()
 
-def register_pattern():
+
+def register_pattern(arg_spaces):
     def register(func):
-        func("float16", "float16", "float16")
+        for arg in arg_spaces:
+            func(*arg)
         return func
 
     return register
@@ -51,20 +53,26 @@ def op_pattern_stitch(evaluated_symbols, evaluated_buffers, matched_pattern_name
         attr["m"] = m
         attr["n"] = n
         attr["k"] = k
-        
+    elif matched_pattern_names[0].startswith("batch_dense"):
+        A_dense, B_dense, C_dense = evaluated_buffers[0]
+        _, m, k = A_dense.shape
+        n = B_dense.shape[-1]
+        attr["m"] = m
+        attr["n"] = n
+        attr["k"] = k
+
     if len(matched_pattern_names) >= 3:
         assert len(evaluated_symbols) >= 3
         assert len(evaluated_buffers) >= 3
         if (
-            matched_pattern_names[0] == "dense_row_row_row"
-            and matched_pattern_names[1] == "bias_row"
-            and matched_pattern_names[2] == "relu"
+            matched_pattern_names[0].startswith("dense")
+            and matched_pattern_names[1].startswith("bias")
+            and matched_pattern_names[2].startswith("relu")
         ):
-            # dense_row_row_row + bias_row + relu
-            m_dense, n_dense, k_dense = get_value(
-                evaluated_symbols[0], "dense_row_row_row")
-            m_bias, n_bias = get_value(evaluated_symbols[1], "bias_row")
-            m_relu, n_relu = get_value(evaluated_symbols[2], "relu")
+            # dense + bias + relu
+            m_dense, n_dense, k_dense = get_value(evaluated_symbols[0], matched_pattern_names[0])
+            m_bias, n_bias = get_value(evaluated_symbols[1], matched_pattern_names[1])
+            m_relu, n_relu = get_value(evaluated_symbols[2], matched_pattern_names[2])
             A_dense, B_dense, C_dense = evaluated_buffers[0]
             A_bias, B_bias, C_bias = evaluated_buffers[1]
             A_relu, B_relu = evaluated_buffers[2]
@@ -76,133 +84,116 @@ def op_pattern_stitch(evaluated_symbols, evaluated_buffers, matched_pattern_name
                 and C_dense == A_bias
                 and C_bias == A_relu
             ):
-                return [get_graph_pattern_cutlass_code(matched_pattern_names[:3]), 3]
+                attr["op_type"] = "cutlass.dense_bias_relu"
+                return [get_graph_pattern_cutlass_code(matched_pattern_names[:3], attr=attr), 3]
     if len(matched_pattern_names) >= 2:
         assert len(evaluated_symbols) >= 2
         assert len(evaluated_buffers) >= 2
-        # dense_row_row_row + bias_row
-        if (
-            matched_pattern_names[0] == "dense_row_row_row"
-            and matched_pattern_names[1] == "bias_row"
+        # dense + bias
+        if matched_pattern_names[0].startswith("dense") and matched_pattern_names[1].startswith(
+            "bias"
         ):
-            m_dense, n_dense, k_dense = get_value(
-                evaluated_symbols[0], "dense_row_row_row")
-            m_bias, n_bias = get_value(evaluated_symbols[1], "bias_row")
+            m_dense, n_dense, k_dense = get_value(evaluated_symbols[0], matched_pattern_names[0])
+            m_bias, n_bias = get_value(evaluated_symbols[1], matched_pattern_names[1])
             A_dense, B_dense, C_dense = evaluated_buffers[0]
             A_bias, B_bias, C_bias = evaluated_buffers[1]
             if m_dense == m_bias and n_dense == n_bias and C_dense == A_bias:
-                return [get_graph_pattern_cutlass_code(matched_pattern_names[:2]), 2]
-        # batch_dense_row_row_row + batch_bias_row
-        if (
-            matched_pattern_names[0] == "batch_dense_row_row_row"
-            and matched_pattern_names[1] == "batch_bias_row"
-        ):
+                attr["op_type"] = "cutlass.dense_bias"
+                return [get_graph_pattern_cutlass_code(matched_pattern_names[:2], attr=attr), 2]
+        # batch_dense + batch_bias
+        if matched_pattern_names[0].startswith("batch_dense") and matched_pattern_names[
+            1
+        ].startswith("batch_bias"):
             b_dense, m_dense, n_dense, k_dense = get_value(
-                evaluated_symbols[0], "batch_dense_row_row_row"
+                evaluated_symbols[0], matched_pattern_names[0]
             )
-            b_bias, m_bias, n_bias = get_value(
-                evaluated_symbols[1], "batch_bias_row")
+            b_bias, m_bias, n_bias = get_value(evaluated_symbols[1], matched_pattern_names[1])
             A_dense, B_dense, C_dense = evaluated_buffers[0]
             A_bias, B_bias, C_bias = evaluated_buffers[1]
             if b_dense == b_bias and m_dense == m_bias and n_dense == n_bias and C_dense == A_bias:
-                return [get_graph_pattern_cutlass_code(matched_pattern_names[:2]), 2]
-        # dense_row_row_row + bias_row
-        if (
-            matched_pattern_names[0] == "batch_dense_row_row_row_2"
-            and matched_pattern_names[1] == "batch_bias_row"
-        ):
-            b_dense, m_dense, n_dense, k_dense = get_value(
-                evaluated_symbols[0], "batch_dense_row_row_row_2"
-            )
-            b_bias, m_bias, n_bias = get_value(
-                evaluated_symbols[1], "batch_bias_row")
-            A_dense, B_dense, C_dense = evaluated_buffers[0]
-            A_bias, B_bias, C_bias = evaluated_buffers[1]
-            if b_dense == b_bias and m_dense == m_bias and n_dense == n_bias and C_dense == A_bias:
-                return [get_graph_pattern_cutlass_code(matched_pattern_names[:2]), 2]
-        # padding2d_NHWC + conv2d_NHWC
-        if (
-            matched_pattern_names[0] in ["padding_2d_NHWC", "copy_4d"]
-            and matched_pattern_names[1] == "conv2d_NHWC"
-        ):
-            if matched_pattern_names[0] == "padding_2d_NHWC":
-                (
-                    N_pad,
-                    H_pad,
-                    W_pad,
-                    C_pad,
-                    pH_pad,
-                    pW_pad,
-                    lH_pad,
-                    lW_pad,
-                    rH_pad,
-                    rW_pad,
-                ) = get_value(evaluated_symbols[0], "padding_2d_NHWC")
-            else:
-                (
-                    N_pad,
-                    H_pad,
-                    W_pad,
-                    C_pad,
-                ) = get_value(evaluated_symbols[0], "copy_4d")
-                pH_pad = rH_pad = H_pad
-                pW_pad = rW_pad = W_pad
-                lH_pad = lW_pad = 0
-            (
-                N_conv,
-                pH_conv,
-                pW_conv,
-                H_conv,
-                W_conv,
-                C_conv,
-                O_conv,
-                KH_conv,
-                KW_conv,
-                stride_h_conv,
-                stride_w_conv,
-                dilation_h_conv,
-                dilation_w_conv,
-            ) = get_value(evaluated_symbols[1], "conv2d_NHWC")
-            A, A_pad = evaluated_buffers[0]
-            A_pad_conv, B_conv, out_conv = evaluated_buffers[1]
-            if (
-                N_pad == N_conv
-                and pH_pad == pH_conv
-                and pW_pad == pW_conv
-                and C_pad == C_conv
-                and A_pad == A_pad_conv
-            ):
-                if (
-                    lH_pad == pH_pad - rH_pad
-                    and lW_pad == pW_pad - rW_pad
-                    and lH_pad + H_pad == rH_pad
-                    and lW_pad + W_pad == rW_pad
-                ):
-                    padding = (lH_pad, lW_pad)
-                    strides = (stride_h_conv, stride_w_conv)
-                    dilation = (dilation_h_conv, dilation_w_conv)
-                    return [
-                        get_graph_pattern_cutlass_code(
-                            matched_pattern_names[:2],
-                            padding=padding,
-                            strides=strides,
-                            dilation=dilation,
-                        ),
-                        2,
-                    ]
+                attr["op_type"] = "cutlass.batch_matmul_bias"
+                return [get_graph_pattern_cutlass_code(matched_pattern_names[:2], attr=attr), 2]
+        # # padding2d_NHWC + conv2d_NHWC
+        # if (
+        #     matched_pattern_names[0] in ["padding_2d_NHWC", "copy_4d"]
+        #     and matched_pattern_names[1] == "conv2d_NHWC"
+        # ):
+        #     if matched_pattern_names[0] == "padding_2d_NHWC":
+        #         (
+        #             N_pad,
+        #             H_pad,
+        #             W_pad,
+        #             C_pad,
+        #             pH_pad,
+        #             pW_pad,
+        #             lH_pad,
+        #             lW_pad,
+        #             rH_pad,
+        #             rW_pad,
+        #         ) = get_value(evaluated_symbols[0], "padding_2d_NHWC")
+        #     else:
+        #         (
+        #             N_pad,
+        #             H_pad,
+        #             W_pad,
+        #             C_pad,
+        #         ) = get_value(evaluated_symbols[0], "copy_4d")
+        #         pH_pad = rH_pad = H_pad
+        #         pW_pad = rW_pad = W_pad
+        #         lH_pad = lW_pad = 0
+        #     (
+        #         N_conv,
+        #         pH_conv,
+        #         pW_conv,
+        #         H_conv,
+        #         W_conv,
+        #         C_conv,
+        #         O_conv,
+        #         KH_conv,
+        #         KW_conv,
+        #         stride_h_conv,
+        #         stride_w_conv,
+        #         dilation_h_conv,
+        #         dilation_w_conv,
+        #     ) = get_value(evaluated_symbols[1], "conv2d_NHWC")
+        #     A, A_pad = evaluated_buffers[0]
+        #     A_pad_conv, B_conv, out_conv = evaluated_buffers[1]
+        #     if (
+        #         N_pad == N_conv
+        #         and pH_pad == pH_conv
+        #         and pW_pad == pW_conv
+        #         and C_pad == C_conv
+        #         and A_pad == A_pad_conv
+        #     ):
+        #         if (
+        #             lH_pad == pH_pad - rH_pad
+        #             and lW_pad == pW_pad - rW_pad
+        #             and lH_pad + H_pad == rH_pad
+        #             and lW_pad + W_pad == rW_pad
+        #         ):
+        #             padding = (lH_pad, lW_pad)
+        #             strides = (stride_h_conv, stride_w_conv)
+        #             dilation = (dilation_h_conv, dilation_w_conv)
+        #             return [
+        #                 get_graph_pattern_cutlass_code(
+        #                     matched_pattern_names[:2],
+        #                     padding=padding,
+        #                     strides=strides,
+        #                     dilation=dilation,
+        #                 ),
+        #                 2,
+        #             ]
     if len(matched_pattern_names) >= 1:
         assert len(evaluated_symbols) >= 1
         assert len(evaluated_buffers) >= 1
         if matched_pattern_names[0].startswith("dense"):
             # dense
-            attr["op_type"]="cutlass.dense"
+            attr["op_type"] = "cutlass.dense"
             return [get_graph_pattern_cutlass_code(matched_pattern_names[:1], attr=attr), 1]
-        elif matched_pattern_names[0] == "batch_dense_row_row_row":
-            # batch_dense_row_row_row
-            return [get_graph_pattern_cutlass_code(matched_pattern_names[:1]), 1]
-        elif matched_pattern_names[0] == "batch_dense_row_row_row_2":
-            # batch_dense_row_row_row_2
-            return [get_graph_pattern_cutlass_code(matched_pattern_names[:1]), 1]
+        elif matched_pattern_names[0].startswith("batch_dense"):
+            # batch_dense
+            attr["op_type"] = "cutlass.batch_matmul"
+            return [get_graph_pattern_cutlass_code(matched_pattern_names[:1], attr=attr), 1]
     return ["", 0]
 
 
@@ -225,10 +216,12 @@ def get_op_pattern_func(name):
 def get_op_pattern_vars(name):
     return OP_PATTERN_VARS_LIST[name]
 
-# register all possibile op configuration
-# only profile the op configuration we use 
 
-@register_pattern()
+# register all possibile op configuration
+# only profile the op configuration we use
+
+
+@register_pattern([["float16", "float16", "float16"]])
 def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
     M = tir.Var("M", "int64")
     N = tir.Var("N", "int64")
@@ -237,128 +230,184 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", relax.TensorStructInfo((M, K), A_TYPE))  # pylint: disable=invalid-name
-                B = R.arg("B", relax.TensorStructInfo((K, N), B_TYPE)
-                          )  # pylint: disable=invalid-name
+                A = R.arg(
+                    "A", relax.TensorStructInfo((M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
                 C = R.matmul(A, B, out_dtype=C_TYPE)
                 R.func_ret_value(C)
     relax_mod = ib.get()
     relax_mod = OperatorLegalizer(relax_mod).transform()
-    name = "dense_row_row_row_"+A_TYPE+"_"+B_TYPE+"_"+C_TYPE
+    name = "dense_row_row_row_" + A_TYPE + "_" + B_TYPE + "_" + C_TYPE
     OP_PATTERN_LIST.append(name)
     OP_PATTERN_FUNC_LIST[name] = relax_mod["matmul"]
     params = relax_mod["matmul"].params
     M = relax_mod["matmul"].buffer_map[params[0]].shape[0]
     N = relax_mod["matmul"].buffer_map[params[1]].shape[1]
-    K = relax_mod["matmul"].buffer_map[params[0]].shape[1]    
+    K = relax_mod["matmul"].buffer_map[params[0]].shape[1]
     OP_PATTERN_VARS_LIST[name] = [M, N, K]
-    OP_PATTERN_ATTR_LIST[name] = {"typea": A_TYPE, "typeb": B_TYPE, "typec": C_TYPE, "layouta": "row", "layoutb": "row", "layoutc": "row"}
+    OP_PATTERN_ATTR_LIST[name] = {
+        "typea": A_TYPE,
+        "typeb": B_TYPE,
+        "typec": C_TYPE,
+        "layouta": "row",
+        "layoutb": "row",
+        "layoutc": "row",
+    }
 
 
-# @register_pattern()
-# def bias_row():
-#     M = tir.Var("M", "int64")
-#     N = tir.Var("N", "int64")
-#     with IRBuilder() as ib:  # pylint: disable=invalid-name
-#         with I.ir_module() as frame:
-#             with R.function():
-#                 R.func_name("main")
-#                 A = R.arg("A", relax.TensorStructInfo((M, N), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.arg("B", relax.TensorStructInfo((1, N), B_TYPE))  # pylint: disable=invalid-name
-#                 C = R.add(A, B)
-#                 R.func_ret_value(C)
-#     relax_mod = ib.get()
-#     relax_mod = OperatorLegalizer(relax_mod).transform()
-#     name = "bias_row"
-#     OP_PATTERN_LIST.append(name)
-#     OP_PATTERN_FUNC_LIST[name] = relax_mod["add"]
-#     OP_PATTERN_VARS_LIST[name] = [M, N]
+@register_pattern([["float16", "float16"]])
+def bias_row(A_TYPE, B_TYPE):
+    M = tir.Var("M", "int64")
+    N = tir.Var("N", "int64")
+    with IRBuilder() as ib:  # pylint: disable=invalid-name
+        with I.ir_module() as frame:
+            with R.function():
+                R.func_name("main")
+                A = R.arg(
+                    "A", relax.TensorStructInfo((M, N), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((1, N), B_TYPE)
+                )  # pylint: disable=invalid-name
+                C = R.add(A, B)
+                R.func_ret_value(C)
+    relax_mod = ib.get()
+    relax_mod = OperatorLegalizer(relax_mod).transform()
+    name = "bias_row_" + A_TYPE + "_" + B_TYPE
+    OP_PATTERN_LIST.append(name)
+    OP_PATTERN_FUNC_LIST[name] = relax_mod["add"]
+    params = relax_mod["add"].params
+    M, N = relax_mod["add"].buffer_map[params[0]].shape
+    OP_PATTERN_VARS_LIST[name] = [M, N]
 
 
-# @register_pattern()
-# def batch_bias_row():
-#     batch = tir.Var("batch", "int64")
-#     M = tir.Var("M", "int64")
-#     N = tir.Var("N", "int64")
-#     with IRBuilder() as ib:  # pylint: disable=invalid-name
-#         with I.ir_module() as frame:
-#             with R.function():
-#                 R.func_name("main")
-#                 A = R.arg("A", relax.TensorStructInfo((batch, M, N), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.arg("B", relax.TensorStructInfo((1, N), B_TYPE))  # pylint: disable=invalid-name
-#                 C = R.add(A, B)
-#                 R.func_ret_value(C)
-#     relax_mod = ib.get()
-#     relax_mod = OperatorLegalizer(relax_mod).transform()
-#     name = "batch_bias_row"
-#     OP_PATTERN_LIST.append(name)
-#     OP_PATTERN_FUNC_LIST[name] = relax_mod["add"]
-#     OP_PATTERN_VARS_LIST[name] = [batch, M, N]
+@register_pattern([["float16", "float16"]])
+def batch_bias_row(A_TYPE, B_TYPE):
+    batch = tir.Var("batch", "int64")
+    M = tir.Var("M", "int64")
+    N = tir.Var("N", "int64")
+    with IRBuilder() as ib:  # pylint: disable=invalid-name
+        with I.ir_module() as frame:
+            with R.function():
+                R.func_name("main")
+                A = R.arg(
+                    "A", relax.TensorStructInfo((batch, M, N), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((1, N), B_TYPE)
+                )  # pylint: disable=invalid-name
+                C = R.add(A, B)
+                R.func_ret_value(C)
+    relax_mod = ib.get()
+    relax_mod = OperatorLegalizer(relax_mod).transform()
+    name = "batch_bias_row" + A_TYPE + "_" + B_TYPE
+    OP_PATTERN_LIST.append(name)
+    OP_PATTERN_FUNC_LIST[name] = relax_mod["add"]
+    params = relax_mod["add"].params
+    batch, M, N = relax_mod["add"].buffer_map[params[0]].shape
+    OP_PATTERN_VARS_LIST[name] = [batch, M, N]
 
 
-# @register_pattern()
-# def relu():
-#     M = tir.Var("M", "int64")
-#     N = tir.Var("N", "int64")
-#     with IRBuilder() as ib:  # pylint: disable=invalid-name
-#         with I.ir_module() as frame:
-#             with R.function():
-#                 R.func_name("main")
-#                 A = R.arg("A", relax.TensorStructInfo((M, N), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.nn.relu(A)
-#                 R.func_ret_value(B)
-#     relax_mod = ib.get()
-#     relax_mod = OperatorLegalizer(relax_mod).transform()
-#     name = "relu"
-#     OP_PATTERN_LIST.append(name)
-#     OP_PATTERN_FUNC_LIST[name] = relax_mod["relu"]
-#     OP_PATTERN_VARS_LIST[name] = [M, N]
+@register_pattern([["float16"]])
+def relu(A_TYPE):
+    M = tir.Var("M", "int64")
+    N = tir.Var("N", "int64")
+    with IRBuilder() as ib:  # pylint: disable=invalid-name
+        with I.ir_module() as frame:
+            with R.function():
+                R.func_name("main")
+                A = R.arg(
+                    "A", relax.TensorStructInfo((M, N), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.nn.relu(A)
+                R.func_ret_value(B)
+    relax_mod = ib.get()
+    relax_mod = OperatorLegalizer(relax_mod).transform()
+    name = "relu_" + A_TYPE
+    OP_PATTERN_LIST.append(name)
+    OP_PATTERN_FUNC_LIST[name] = relax_mod["relu"]
+    params = relax_mod["relu"].params
+    M, N = relax_mod["relu"].buffer_map[params[0]].shape
+    OP_PATTERN_VARS_LIST[name] = [M, N]
 
 
-# @register_pattern()
-# def batch_dense_row_row_row():
-#     batch = tir.Var("batch", "int64")
-#     M = tir.Var("M", "int64")
-#     N = tir.Var("N", "int64")
-#     K = tir.Var("K", "int64")
+@register_pattern([["float16", "float16", "float16"]])
+def batch_dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
+    batch = tir.Var("batch", "int64")
+    M = tir.Var("M", "int64")
+    N = tir.Var("N", "int64")
+    K = tir.Var("K", "int64")
 
-#     with IRBuilder() as ib:  # pylint: disable=invalid-name
-#         with I.ir_module() as frame:
-#             with R.function():
-#                 R.func_name("main")
-#                 A = R.arg("A", relax.TensorStructInfo((batch, M, K), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.arg("B", relax.TensorStructInfo((K, N), B_TYPE))  # pylint: disable=invalid-name
-#                 C = R.nn.matmul(A, B, out_dtype=C_TYPE)
-#                 R.func_ret_value(C)
-#     relax_mod = ib.get()
-#     relax_mod = OperatorLegalizer(relax_mod).transform()
-#     name = "batch_dense_row_row_row"
-#     OP_PATTERN_LIST.append(name)
-#     OP_PATTERN_FUNC_LIST[name] = relax_mod["matmul"]
-#     OP_PATTERN_VARS_LIST[name] = [batch, M, N, K]
+    with IRBuilder() as ib:  # pylint: disable=invalid-name
+        with I.ir_module() as frame:
+            with R.function():
+                R.func_name("main")
+                A = R.arg(
+                    "A", relax.TensorStructInfo((batch, M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
+                C = R.matmul(A, B, out_dtype=C_TYPE)
+                R.func_ret_value(C)
+    relax_mod = ib.get()
+    relax_mod = OperatorLegalizer(relax_mod).transform()
+    name = "batch_dense_row_row_row_" + A_TYPE + "_" + B_TYPE + "_" + C_TYPE
+    OP_PATTERN_LIST.append(name)
+    OP_PATTERN_FUNC_LIST[name] = relax_mod["matmul"]
+    params = relax_mod["matmul"].params
+    batch, M, K = relax_mod["matmul"].buffer_map[params[0]].shape
+    _, N = relax_mod["matmul"].buffer_map[params[1]].shape
+    OP_PATTERN_VARS_LIST[name] = [batch, M, N, K]
+    OP_PATTERN_ATTR_LIST[name] = {
+        "typea": A_TYPE,
+        "typeb": B_TYPE,
+        "typec": C_TYPE,
+        "layouta": "row",
+        "layoutb": "row",
+        "layoutc": "row",
+    }
 
 
-# @register_pattern()
-# def batch_dense_row_row_row_2():
-#     batch = tir.Var("batch", "int64")
-#     M = tir.Var("M", "int64")
-#     N = tir.Var("N", "int64")
-#     K = tir.Var("K", "int64")
+@register_pattern([["float16", "float16", "float16"]])
+def batch_dense_row_row_row_2(A_TYPE, B_TYPE, C_TYPE):
+    batch = tir.Var("batch", "int64")
+    M = tir.Var("M", "int64")
+    N = tir.Var("N", "int64")
+    K = tir.Var("K", "int64")
 
-#     with IRBuilder() as ib:  # pylint: disable=invalid-name
-#         with I.ir_module() as frame:
-#             with R.function():
-#                 R.func_name("main")
-#                 A = R.arg("A", relax.TensorStructInfo((batch, M, K), A_TYPE))  # pylint: disable=invalid-name
-#                 B = R.arg("B", relax.TensorStructInfo((batch, K, N), B_TYPE))  # pylint: disable=invalid-name
-#                 C = R.nn.matmul(A, B, out_dtype=C_TYPE)
-#                 R.func_ret_value(C)
-#     relax_mod = ib.get()
-#     relax_mod = OperatorLegalizer(relax_mod).transform()
-#     name = "batch_dense_row_row_row_2"
-#     OP_PATTERN_LIST.append(name)
-#     OP_PATTERN_FUNC_LIST[name] = relax_mod["matmul"]
-#     OP_PATTERN_VARS_LIST[name] = [batch, M, N, K]
+    with IRBuilder() as ib:  # pylint: disable=invalid-name
+        with I.ir_module() as frame:
+            with R.function():
+                R.func_name("main")
+                A = R.arg(
+                    "A", relax.TensorStructInfo((batch, M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((batch, K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
+                C = R.matmul(A, B, out_dtype=C_TYPE)
+                R.func_ret_value(C)
+    relax_mod = ib.get()
+    relax_mod = OperatorLegalizer(relax_mod).transform()
+    name = "batch_dense_2_row_row_row_" + A_TYPE + "_" + B_TYPE + "_" + C_TYPE
+    OP_PATTERN_LIST.append(name)
+    OP_PATTERN_FUNC_LIST[name] = relax_mod["matmul"]
+    params = relax_mod["matmul"].params
+    batch, M, K = relax_mod["matmul"].buffer_map[params[0]].shape
+    _, _, N = relax_mod["matmul"].buffer_map[params[1]].shape
+    OP_PATTERN_VARS_LIST[name] = [batch, M, N, K]
+    OP_PATTERN_ATTR_LIST[name] = {
+        "typea": A_TYPE,
+        "typeb": B_TYPE,
+        "typec": C_TYPE,
+        "layouta": "row",
+        "layoutb": "row",
+        "layoutc": "row",
+    }
 
 
 # @register_pattern()
@@ -486,841 +535,3 @@ def dense_row_row_row(A_TYPE, B_TYPE, C_TYPE):
 #     OP_PATTERN_LIST.append(name)
 #     OP_PATTERN_FUNC_LIST[name] = mod["main"]
 #     OP_PATTERN_VARS_LIST[name] = [N, pH, pW, H, W, C, O, KH, KW, StrideH, StrideW, DilateH, DilateW]
-
-
-# GRAPH_PATTERN_CODE_LIST[
-#     "dense_row_row_row"
-# ] = """
-#       #define CUTLASS_ENABLE_CUBLAS 1
-#       #define CUTLASS_NAMESPACE cutlass
-#       #define CUTLASS_ENABLE_TENSOR_CORE_MMA 1
-#       #define NDEBUG
-
-#       #include <cutlass/cutlass.h>
-#       #include <cutlass/gemm/device/gemm.h>
-#       #include <cutlass/layout/matrix.h>
-#       #include <cutlass/numeric_types.h>
-
-#       #include <fstream>
-#       #include <iostream>
-#       #include <sstream>
-#       #include <vector>
-
-#       #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-
-#       #include <tvm/runtime/logging.h>
-#       #include <tvm/runtime/ndarray.h>
-#       #include <tvm/runtime/packed_func.h>
-
-#       namespace {
-
-#       using namespace tvm;
-#       using namespace tvm::runtime;
-
-#       void _GEMM(NDArray A, NDArray B, NDArray C) {
-#         // A: [M, K], B: [K, N]
-#         CHECK_EQ(A->ndim, 2);
-#         CHECK_EQ(B->ndim, 2);
-#         CHECK_EQ(C->ndim, 2);
-#         CHECK_EQ(A->shape[1], B->shape[0]);
-#         int M = A->shape[0];
-#         int K = A->shape[1];
-#         int N = B->shape[1];
-#         CHECK_EQ(C->shape[0], M);
-#         CHECK_EQ(C->shape[1], N);
-#         CHECK_EQ(A.DataType(), DataType::Float(16));
-#         CHECK_EQ(B.DataType(), DataType::Float(16));
-#         CHECK_EQ(C.DataType(), DataType::Float(16));
-#         // Define the GEMM operation
-#         using Gemm = cutlass::gemm::device::Gemm<cutlass::half_t,            // ElementA
-#                                                 cutlass::layout::RowMajor,  // LayoutA
-#                                                 cutlass::half_t,            // ElementB
-#                                                 cutlass::layout::RowMajor,  // LayoutB
-#                                                 cutlass::half_t,            // ElementOutput
-#                                                 cutlass::layout::RowMajor   // LayoutOutput
-#                                                 >;
-#         Gemm gemm_op;
-#         cutlass::half_t alpha(1.0);
-#         cutlass::half_t beta(0.0);
-#         cutlass::layout::ColumnMajor::Stride::Index lda(K);
-#         cutlass::layout::ColumnMajor::Stride::Index ldb(N);
-#         cutlass::layout::ColumnMajor::Stride::Index ldc(N);
-#         cutlass::half_t* a = reinterpret_cast<cutlass::half_t*>(A->data);
-#         cutlass::half_t* b = reinterpret_cast<cutlass::half_t*>(B->data);
-#         cutlass::half_t* c = reinterpret_cast<cutlass::half_t*>(C->data);
-#         cutlass::Status status = gemm_op({
-#             {M, N, K},     //
-#             {a, lda},      //
-#             {b, ldb},      //
-#             {c, ldc},      //
-#             {c, ldc},      //
-#             {alpha, beta}  //
-#         });
-#         CHECK(status == cutlass::Status::kSuccess);
-#       }
-
-#       }  // namespace
-#       TVM_DLL_EXPORT_TYPED_FUNC({global_symbol}, _GEMM);
-#       """
-
-# GRAPH_PATTERN_CODE_LIST[
-#     "dense_row_row_row/bias_row"
-# ] = """
-#       #define CUTLASS_ENABLE_CUBLAS 1
-#       #define CUTLASS_NAMESPACE cutlass
-#       #define CUTLASS_ENABLE_TENSOR_CORE_MMA 1
-#       #define NDEBUG
-
-#       #include <cutlass/cutlass.h>
-#       #include <cutlass/gemm/device/gemm.h>
-#       #include <cutlass/layout/matrix.h>
-#       #include <cutlass/numeric_types.h>
-
-#       #include <fstream>
-#       #include <iostream>
-#       #include <sstream>
-#       #include <vector>
-
-#       #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-
-#       #include <tvm/runtime/logging.h>
-#       #include <tvm/runtime/ndarray.h>
-#       #include <tvm/runtime/packed_func.h>
-
-#       namespace {
-
-#       using namespace tvm;
-#       using namespace tvm::runtime;
-
-#       // simple specialized impl, can be replaced by
-#       // call into libraries.
-#       void _HGEMM_BIAS(NDArray A, NDArray B, NDArray Bias, NDArray C) {
-#         // A: [M, K], B: [K, N], BIAS: [1, N], C: [M, N]
-#         CHECK_EQ(A->ndim, 2);
-#         CHECK_EQ(B->ndim, 2);
-#         CHECK_EQ(Bias->ndim, 2);
-#         CHECK_EQ(C->ndim, 2);
-#         CHECK_EQ(A->shape[1], B->shape[0]);
-#         int M = A->shape[0];
-#         int K = A->shape[1];
-#         int N = B->shape[1];
-#         CHECK_EQ(C->shape[0], M);
-#         CHECK_EQ(C->shape[1], N);
-#         CHECK_EQ(Bias->shape[0], 1);
-#         CHECK_EQ(Bias->shape[1], N);
-#         CHECK_EQ(A.DataType(), DataType::Float(16));
-#         CHECK_EQ(B.DataType(), DataType::Float(16));
-#         CHECK_EQ(Bias.DataType(), DataType::Float(16));
-#         CHECK_EQ(C.DataType(), DataType::Float(16));
-
-#         // Define the GEMM operation
-#         using Gemm = cutlass::gemm::device::Gemm<
-#           cutlass::half_t, cutlass::layout::RowMajor,
-#           cutlass::half_t, cutlass::layout::RowMajor,
-#           cutlass::half_t, cutlass::layout::RowMajor,
-#           cutlass::half_t,
-#           cutlass::arch::OpClassTensorOp,
-#           cutlass::arch::Sm75,
-#           cutlass::gemm::GemmShape<64, 64, 32>,
-#           cutlass::gemm::GemmShape<32, 32, 32>,
-#           cutlass::gemm::GemmShape<16, 8, 8>,
-
-#           cutlass::epilogue::thread::LinearCombination<
-#             cutlass::half_t,
-#             8,
-#             cutlass::half_t,
-#             cutlass::half_t,
-#             cutlass::epilogue::thread::ScaleType::NoBetaScaling
-#           >,
-#           cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>,
-#           2,
-#           8,
-#           8,
-#           false,
-#           cutlass::arch::OpMultiplyAdd
-#         >;
-
-#         Gemm gemm_op;
-
-#         cutlass::half_t alpha(1.0);
-#         cutlass::half_t beta(0.0);
-#         cutlass::layout::ColumnMajor::Stride::Index lda(K);
-#         cutlass::layout::ColumnMajor::Stride::Index ldb(N);
-#         cutlass::layout::ColumnMajor::Stride::Index ld_bias(0);
-#         cutlass::layout::ColumnMajor::Stride::Index ldc(N);
-#         cutlass::half_t* a = reinterpret_cast<cutlass::half_t*>(A->data);
-#         cutlass::half_t* b = reinterpret_cast<cutlass::half_t*>(B->data);
-#         cutlass::half_t* c = reinterpret_cast<cutlass::half_t*>(C->data);
-#         cutlass::half_t* bias = reinterpret_cast<cutlass::half_t*>(Bias->data);
-
-#         cutlass::Status status = gemm_op({
-#             {M, N, K},            // GemmCoord problem_size_
-#             {a, lda},             // TensorRef<ElementA const, LayoutA> ref_A_
-#             {b, ldb},             // TensorRef<ElementB const, LayoutB> ref_B_
-#             {bias, ld_bias},      // TensorRef<ElementC const, LayoutC> ref_C_
-#             {c, ldc},             // TensorRef<ElementC, LayoutC> ref_D_
-#             {alpha, beta}         // typename EpilogueOutputOp::Params epilogue_
-#         });
-#         CHECK(status == cutlass::Status::kSuccess);
-#       }
-
-#       }  // namespace
-#       TVM_DLL_EXPORT_TYPED_FUNC({global_symbol}, _HGEMM_BIAS);
-# """
-
-# GRAPH_PATTERN_CODE_LIST[
-#     "dense_row_row_row/bias_row/relu"
-# ] = """
-#       #define CUTLASS_ENABLE_CUBLAS 1
-#       #define CUTLASS_NAMESPACE cutlass
-#       #define CUTLASS_ENABLE_TENSOR_CORE_MMA 1
-#       #define NDEBUG
-
-#       #include <cutlass/cutlass.h>
-#       #include <cutlass/gemm/device/gemm.h>
-#       #include <cutlass/layout/matrix.h>
-#       #include <cutlass/numeric_types.h>
-
-#       #include <fstream>
-#       #include <iostream>
-#       #include <sstream>
-#       #include <vector>
-
-#       #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-
-#       #include <tvm/runtime/logging.h>
-#       #include <tvm/runtime/ndarray.h>
-#       #include <tvm/runtime/packed_func.h>
-
-#       namespace {
-
-#       using namespace tvm;
-#       using namespace tvm::runtime;
-
-#       // simple specialized impl, can be replaced by
-#       // call into libraries.
-#       void _HGEMM_BIAS_RELU(NDArray A, NDArray B, NDArray Bias, NDArray C) {
-#         // A: [M, K], B: [K, N], BIAS: [1, N], C: [M, N]
-#         CHECK_EQ(A->ndim, 2);
-#         CHECK_EQ(B->ndim, 2);
-#         CHECK_EQ(Bias->ndim, 2);
-#         CHECK_EQ(C->ndim, 2);
-#         CHECK_EQ(A->shape[1], B->shape[0]);
-#         int M = A->shape[0];
-#         int K = A->shape[1];
-#         int N = B->shape[1];
-#         CHECK_EQ(C->shape[0], M);
-#         CHECK_EQ(C->shape[1], N);
-#         CHECK_EQ(Bias->shape[0], 1);
-#         CHECK_EQ(Bias->shape[1], N);
-#         CHECK_EQ(A.DataType(), DataType::Float(16));
-#         CHECK_EQ(B.DataType(), DataType::Float(16));
-#         CHECK_EQ(Bias.DataType(), DataType::Float(16));
-#         CHECK_EQ(C.DataType(), DataType::Float(16));
-
-#         // Define the GEMM operation
-#         using Gemm = cutlass::gemm::device::Gemm<
-#           cutlass::half_t, cutlass::layout::RowMajor,
-#           cutlass::half_t, cutlass::layout::RowMajor,
-#           cutlass::half_t, cutlass::layout::RowMajor,
-#           cutlass::half_t,
-#           cutlass::arch::OpClassTensorOp,
-#           cutlass::arch::Sm75,
-#           cutlass::gemm::GemmShape<64, 64, 32>,
-#           cutlass::gemm::GemmShape<32, 32, 32>,
-#           cutlass::gemm::GemmShape<16, 8, 8>,
-
-#           cutlass::epilogue::thread::LinearCombinationRelu<
-#             cutlass::half_t,
-#             8,
-#             cutlass::half_t,
-#             cutlass::half_t,
-#             cutlass::epilogue::thread::ScaleType::NoBetaScaling
-#           >,
-#           cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>,
-#           2,
-#           8,
-#           8,
-#           false,
-#           cutlass::arch::OpMultiplyAdd
-#         >;
-
-#         Gemm gemm_op;
-
-#         cutlass::half_t alpha(1.0);
-#         cutlass::half_t beta(0.0);
-#         cutlass::layout::ColumnMajor::Stride::Index lda(K);
-#         cutlass::layout::ColumnMajor::Stride::Index ldb(N);
-#         cutlass::layout::ColumnMajor::Stride::Index ld_bias(0);
-#         cutlass::layout::ColumnMajor::Stride::Index ldc(N);
-#         cutlass::half_t* a = reinterpret_cast<cutlass::half_t*>(A->data);
-#         cutlass::half_t* b = reinterpret_cast<cutlass::half_t*>(B->data);
-#         cutlass::half_t* c = reinterpret_cast<cutlass::half_t*>(C->data);
-#         cutlass::half_t* bias = reinterpret_cast<cutlass::half_t*>(Bias->data);
-
-#         cutlass::Status status = gemm_op({
-#             {M, N, K},            // GemmCoord problem_size_
-#             {a, lda},             // TensorRef<ElementA const, LayoutA> ref_A_
-#             {b, ldb},             // TensorRef<ElementB const, LayoutB> ref_B_
-#             {bias, ld_bias},      // TensorRef<ElementC const, LayoutC> ref_C_
-#             {c, ldc},             // TensorRef<ElementC, LayoutC> ref_D_
-#             {alpha, beta}         // typename EpilogueOutputOp::Params epilogue_
-#         });
-#         CHECK(status == cutlass::Status::kSuccess);
-#       }
-
-#       }  // namespace
-#       TVM_DLL_EXPORT_TYPED_FUNC({global_symbol}, _HGEMM_BIAS_RELU);
-#     """
-
-# GRAPH_PATTERN_CODE_LIST[
-#     "batch_dense_row_row_row"
-# ] = """
-#       #define CUTLASS_ENABLE_CUBLAS 1
-#       #define CUTLASS_NAMESPACE cutlass
-#       #define CUTLASS_ENABLE_TENSOR_CORE_MMA 1
-#       #define NDEBUG
-
-#       #include <cutlass/cutlass.h>
-#       #include <cutlass/gemm/device/gemm_batched.h>
-#       #include <cutlass/layout/matrix.h>
-#       #include <cutlass/numeric_types.h>
-
-#       #include <fstream>
-#       #include <iostream>
-#       #include <sstream>
-#       #include <vector>
-
-#       #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-
-#       #include <tvm/runtime/logging.h>
-#       #include <tvm/runtime/ndarray.h>
-#       #include <tvm/runtime/packed_func.h>
-
-#       namespace {
-
-#       using namespace tvm;
-#       using namespace tvm::runtime;
-
-#       // simple specialized impl, can be replaced by
-#       // call into libraries.
-#       void _BHGEMM(NDArray A, NDArray B, NDArray C) {
-#         // A: [Batch, M, K], B: [K, N], C: [Batch, M, N]
-#         CHECK_EQ(A->ndim, 3);
-#         CHECK_EQ(B->ndim, 2);
-#         CHECK_EQ(C->ndim, 3);
-#         CHECK_EQ(A->shape[2], B->shape[0]);
-#         int Batch = A->shape[0];
-#         int M = A->shape[1];
-#         int K = A->shape[2];
-#         int N = B->shape[1];
-#         CHECK_EQ(C->shape[0], Batch);
-#         CHECK_EQ(C->shape[1], M);
-#         CHECK_EQ(C->shape[2], N);
-#         CHECK_EQ(A.DataType(), DataType::Float(16));
-#         CHECK_EQ(B.DataType(), DataType::Float(16));
-#         CHECK_EQ(C.DataType(), DataType::Float(16));
-
-#         // Define the GEMM operation
-#         using Gemm = cutlass::gemm::device::GemmBatched<cutlass::half_t,            // ElementA
-#                                                         cutlass::layout::RowMajor,  // LayoutA
-#                                                         cutlass::half_t,            // ElementB
-#                                                         cutlass::layout::RowMajor,  // LayoutB
-#                                                         cutlass::half_t,            // ElementOutput
-#                                                         cutlass::layout::RowMajor   // LayoutOutput
-#                                                         >;
-#         Gemm gemm_op;
-#         cutlass::half_t alpha(1.0);
-#         cutlass::half_t beta(0.0);
-#         cutlass::layout::ColumnMajor::Stride::Index lda(K);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_A(M * K);
-#         cutlass::layout::ColumnMajor::Stride::Index ldb(N);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_B(0);
-#         cutlass::layout::ColumnMajor::Stride::Index ldc(N);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_C(M * N);
-#         cutlass::half_t* a = reinterpret_cast<cutlass::half_t*>(A->data);
-#         cutlass::half_t* b = reinterpret_cast<cutlass::half_t*>(B->data);
-#         cutlass::half_t* c = reinterpret_cast<cutlass::half_t*>(C->data);
-#         cutlass::Status status = gemm_op({
-#             {M, N, K},        //
-#             {a, lda},         //
-#             batch_stride_A,   //
-#             {b, ldb},         //
-#             batch_stride_B,   //
-#             {c, ldc},         //
-#             batch_stride_C,   //
-#             {c, ldc},         //
-#             batch_stride_C,   //
-#             {alpha, beta},    //
-#             Batch             //
-#         });
-#         CHECK(status == cutlass::Status::kSuccess);
-#       }
-
-#       }  // namespace
-#       TVM_DLL_EXPORT_TYPED_FUNC({global_symbol}, _BHGEMM);
-# """
-
-# GRAPH_PATTERN_CODE_LIST[
-#     "batch_dense_row_row_row/batch_bias_row"
-# ] = """
-#       #define CUTLASS_ENABLE_CUBLAS 1
-#       #define CUTLASS_NAMESPACE cutlass
-#       #define CUTLASS_ENABLE_TENSOR_CORE_MMA 1
-#       #define NDEBUG
-
-#       #include <cutlass/cutlass.h>
-#       #include <cutlass/gemm/device/gemm.h>
-#       #include <cutlass/gemm/device/gemm_batched.h>
-#       #include <cutlass/layout/matrix.h>
-#       #include <cutlass/numeric_types.h>
-
-#       #include <fstream>
-#       #include <iostream>
-#       #include <sstream>
-#       #include <vector>
-
-#       #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-
-#       #include <tvm/runtime/logging.h>
-#       #include <tvm/runtime/ndarray.h>
-#       #include <tvm/runtime/packed_func.h>
-
-#       namespace {
-
-#       using namespace tvm;
-#       using namespace tvm::runtime;
-
-#       // simple specialized impl, can be replaced by
-#       // call into libraries.
-#       void _BHGEMM(NDArray A, NDArray B, NDArray Bias, NDArray C) {
-#         // A: [Batch, M, K], B: [K, N], Bias: [1, N], C: [Batch, M, N]
-#         CHECK_EQ(A->ndim, 3);
-#         CHECK_EQ(B->ndim, 2);
-#         CHECK_EQ(Bias->ndim, 2);
-#         CHECK_EQ(C->ndim, 3);
-#         CHECK_EQ(A->shape[2], B->shape[0]);
-#         CHECK_EQ(Bias->shape[0], 1);
-#         CHECK_EQ(Bias->shape[1], B->shape[1]);
-#         int Batch = A->shape[0];
-#         int M = A->shape[1];
-#         int K = A->shape[2];
-#         int N = B->shape[1];
-#         CHECK_EQ(C->shape[0], Batch);
-#         CHECK_EQ(C->shape[1], M);
-#         CHECK_EQ(C->shape[2], N);
-#         CHECK_EQ(A.DataType(), DataType::Float(16));
-#         CHECK_EQ(B.DataType(), DataType::Float(16));
-#         CHECK_EQ(C.DataType(), DataType::Float(16));
-
-#         // Define the GEMM operation
-#         // Gemm operator cutlass_tensorop_h16816gemm_128x128_32x5_tt_align8
-#         using Gemm = cutlass::gemm::device::GemmBatched<
-#             cutlass::half_t, cutlass::layout::RowMajor,
-#             cutlass::half_t, cutlass::layout::RowMajor,
-#             cutlass::half_t, cutlass::layout::RowMajor,
-#             cutlass::half_t,
-#             cutlass::arch::OpClassTensorOp,
-#             cutlass::arch::Sm80,
-#             cutlass::gemm::GemmShape<64, 64, 64>,
-#             cutlass::gemm::GemmShape<32, 32, 64>,
-#             cutlass::gemm::GemmShape<16, 8, 16>,
-
-#             cutlass::epilogue::thread::LinearCombination<
-#                 cutlass::half_t,
-#                 8,
-#                 cutlass::half_t,
-#                 cutlass::half_t,
-#                 cutlass::epilogue::thread::ScaleType::NoBetaScaling
-#             >,
-#             cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
-#             5,
-#             8,
-#             8,
-
-#             cutlass::arch::OpMultiplyAdd
-#         >;
-#         Gemm gemm_op;
-#         cutlass::half_t alpha(1.0);
-#         cutlass::half_t beta(0.0);
-#         cutlass::layout::ColumnMajor::Stride::Index lda(K);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_A(M * K);
-#         cutlass::layout::ColumnMajor::Stride::Index ldb(N);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_B(0);
-#         cutlass::layout::ColumnMajor::Stride::Index ld_bias(0);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_bias(0);
-#         cutlass::layout::ColumnMajor::Stride::Index ldc(N);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_C(M * N);
-#         cutlass::half_t* a = reinterpret_cast<cutlass::half_t*>(A->data);
-#         cutlass::half_t* b = reinterpret_cast<cutlass::half_t*>(B->data);
-#         cutlass::half_t* c = reinterpret_cast<cutlass::half_t*>(C->data);
-#         cutlass::half_t* bias = reinterpret_cast<cutlass::half_t*>(Bias->data);
-#         cutlass::Status status = gemm_op({
-#             {M, N, K},           //
-#             {a, lda},            //
-#             batch_stride_A,      //
-#             {b, ldb},            //
-#             batch_stride_B,      //
-#             {bias, ld_bias},     //
-#             batch_stride_bias,   //
-#             {c, ldc},            //
-#             batch_stride_C,      //
-#             {alpha, beta},       //
-#             Batch                //
-#         });
-#         CHECK(status == cutlass::Status::kSuccess);
-#       }
-
-#       }  // namespace
-#       TVM_DLL_EXPORT_TYPED_FUNC({global_symbol}, _BHGEMM);
-# """
-
-# GRAPH_PATTERN_CODE_LIST[
-#     "batch_dense_row_row_row_2"
-# ] = """
-#       #define CUTLASS_ENABLE_CUBLAS 1
-#       #define CUTLASS_NAMESPACE cutlass
-#       #define CUTLASS_ENABLE_TENSOR_CORE_MMA 1
-#       #define NDEBUG
-
-#       #include <cutlass/cutlass.h>
-#       #include <cutlass/gemm/device/gemm_batched.h>
-#       #include <cutlass/layout/matrix.h>
-#       #include <cutlass/numeric_types.h>
-
-#       #include <fstream>
-#       #include <iostream>
-#       #include <sstream>
-#       #include <vector>
-
-#       #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-
-#       #include <tvm/runtime/logging.h>
-#       #include <tvm/runtime/ndarray.h>
-#       #include <tvm/runtime/packed_func.h>
-
-#       namespace {
-
-#       using namespace tvm;
-#       using namespace tvm::runtime;
-
-#       // simple specialized impl, can be replaced by
-#       // call into libraries.
-#       void _BHGEMM(NDArray A, NDArray B, NDArray C) {
-#         // A: [Batch, M, K], B: [Batchm K, N], C: [Batch, M, N]
-#         CHECK_EQ(A->ndim, 3);
-#         CHECK_EQ(B->ndim, 3);
-#         CHECK_EQ(C->ndim, 3);
-#         CHECK_EQ(A->shape[0], B->shape[0]);
-#         CHECK_EQ(A->shape[2], B->shape[1]);
-#         int Batch = A->shape[0];
-#         int M = A->shape[1];
-#         int K = A->shape[2];
-#         int N = B->shape[2];
-#         CHECK_EQ(C->shape[0], Batch);
-#         CHECK_EQ(C->shape[1], M);
-#         CHECK_EQ(C->shape[2], N);
-#         CHECK_EQ(A.DataType(), DataType::Float(16));
-#         CHECK_EQ(B.DataType(), DataType::Float(16));
-#         CHECK_EQ(C.DataType(), DataType::Float(16));
-
-#         // Define the GEMM operation
-#         using Gemm = cutlass::gemm::device::GemmBatched<cutlass::half_t,            // ElementA
-#                                                         cutlass::layout::RowMajor,  // LayoutA
-#                                                         cutlass::half_t,            // ElementB
-#                                                         cutlass::layout::RowMajor,  // LayoutB
-#                                                         cutlass::half_t,            // ElementOutput
-#                                                         cutlass::layout::RowMajor   // LayoutOutput
-#                                                         >;
-#         Gemm gemm_op;
-#         cutlass::half_t alpha(1.0);
-#         cutlass::half_t beta(0.0);
-#         cutlass::layout::ColumnMajor::Stride::Index lda(K);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_A(M * K);
-#         cutlass::layout::ColumnMajor::Stride::Index ldb(N);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_B(K * N);
-#         cutlass::layout::ColumnMajor::Stride::Index ldc(N);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_C(M * N);
-#         cutlass::half_t* a = reinterpret_cast<cutlass::half_t*>(A->data);
-#         cutlass::half_t* b = reinterpret_cast<cutlass::half_t*>(B->data);
-#         cutlass::half_t* c = reinterpret_cast<cutlass::half_t*>(C->data);
-#         cutlass::Status status = gemm_op({
-#             {M, N, K},        //
-#             {a, lda},         //
-#             batch_stride_A,   //
-#             {b, ldb},         //
-#             batch_stride_B,   //
-#             {c, ldc},         //
-#             batch_stride_C,   //
-#             {c, ldc},         //
-#             batch_stride_C,   //
-#             {alpha, beta},    //
-#             Batch             //
-#         });
-#         CHECK(status == cutlass::Status::kSuccess);
-#       }
-
-#       }  // namespace
-#       TVM_DLL_EXPORT_TYPED_FUNC({global_symbol}, _BHGEMM);
-# """
-
-# GRAPH_PATTERN_CODE_LIST[
-#     "batch_dense_row_row_row_2/batch_bias_row"
-# ] = """
-#       #define CUTLASS_ENABLE_CUBLAS 1
-#       #define CUTLASS_NAMESPACE cutlass
-#       #define CUTLASS_ENABLE_TENSOR_CORE_MMA 1
-#       #define NDEBUG
-
-#       #include <cutlass/cutlass.h>
-#       #include <cutlass/gemm/device/gemm_batched.h>
-#       #include <cutlass/layout/matrix.h>
-#       #include <cutlass/numeric_types.h>
-
-#       #include <fstream>
-#       #include <iostream>
-#       #include <sstream>
-#       #include <vector>
-
-#       #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-
-#       #include <tvm/runtime/logging.h>
-#       #include <tvm/runtime/ndarray.h>
-#       #include <tvm/runtime/packed_func.h>
-
-#       namespace {
-
-#       using namespace tvm;
-#       using namespace tvm::runtime;
-
-#       // simple specialized impl, can be replaced by
-#       // call into libraries.
-#       void _BHGEMM(NDArray A, NDArray B, NDArray Bias, NDArray C) {
-#         // A: [Batch, M, K], B: [Batch, K, N], Bias: [1, N], C: [Batch, M, N]
-#         CHECK_EQ(A->ndim, 3);
-#         CHECK_EQ(B->ndim, 3);
-#         CHECK_EQ(Bias->ndim, 2);
-#         CHECK_EQ(C->ndim, 3);
-#         CHECK_EQ(A->shape[0], B->shape[0]);
-#         CHECK_EQ(A->shape[2], B->shape[1]);
-#         CHECK_EQ(Bias->shape[0], 1);
-#         CHECK_EQ(Bias->shape[1], B->shape[1]);
-#         int Batch = A->shape[0];
-#         int M = A->shape[1];
-#         int K = A->shape[2];
-#         int N = B->shape[1];
-#         CHECK_EQ(C->shape[0], Batch);
-#         CHECK_EQ(C->shape[1], M);
-#         CHECK_EQ(C->shape[2], N);
-#         CHECK_EQ(A.DataType(), DataType::Float(16));
-#         CHECK_EQ(B.DataType(), DataType::Float(16));
-#         CHECK_EQ(C.DataType(), DataType::Float(16));
-
-#         // Define the GEMM operation
-#         using Gemm = cutlass::gemm::device::GemmBatched<
-#             cutlass::half_t, cutlass::layout::RowMajor,
-#             cutlass::half_t, cutlass::layout::RowMajor,
-#             cutlass::half_t, cutlass::layout::RowMajor,
-#             cutlass::half_t,
-#             cutlass::arch::OpClassTensorOp,
-#             cutlass::arch::Sm80,
-#             cutlass::gemm::GemmShape<64, 64, 64>,
-#             cutlass::gemm::GemmShape<32, 32, 64>,
-#             cutlass::gemm::GemmShape<16, 8, 16>,
-
-#             cutlass::epilogue::thread::LinearCombination<
-#                 cutlass::half_t,
-#                 8,
-#                 cutlass::half_t,
-#                 cutlass::half_t,
-#                 cutlass::epilogue::thread::ScaleType::NoBetaScaling
-#             >,
-#             cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
-#             5,
-#             8,
-#             8,
-
-#             cutlass::arch::OpMultiplyAdd
-#         >;
-#         Gemm gemm_op;
-#         cutlass::half_t alpha(1.0);
-#         cutlass::half_t beta(0.0);
-#         cutlass::layout::ColumnMajor::Stride::Index lda(K);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_A(M * K);
-#         cutlass::layout::ColumnMajor::Stride::Index ldb(N);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_B(K * N);
-#         cutlass::layout::ColumnMajor::Stride::Index ld_bias(0);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_bias(0);
-#         cutlass::layout::ColumnMajor::Stride::Index ldc(N);
-#         cutlass::layout::ColumnMajor::Stride::Index batch_stride_C(M * N);
-#         cutlass::half_t* a = reinterpret_cast<cutlass::half_t*>(A->data);
-#         cutlass::half_t* b = reinterpret_cast<cutlass::half_t*>(B->data);
-#         cutlass::half_t* c = reinterpret_cast<cutlass::half_t*>(C->data);
-#         cutlass::half_t* bias = reinterpret_cast<cutlass::half_t*>(Bias->data);
-#         cutlass::Status status = gemm_op({
-#             {M, N, K},           //
-#             {a, lda},            //
-#             batch_stride_A,      //
-#             {b, ldb},            //
-#             batch_stride_B,      //
-#             {bias, ld_bias},     //
-#             batch_stride_bias,   //
-#             {c, ldc},            //
-#             batch_stride_C,      //
-#             {alpha, beta},       //
-#             Batch                //
-#         });
-#         CHECK(status == cutlass::Status::kSuccess);
-#       }
-
-#       }  // namespace
-#       TVM_DLL_EXPORT_TYPED_FUNC({global_symbol}, _BHGEMM);
-# """
-
-
-# def conv2d_NHWC_codegen(padding, strides, dilation):
-#     pad_H, pad_W = tuple(str(int(x)) for x in padding)
-#     stride_H, stride_W = tuple(str(int(x)) for x in strides)
-#     dilation_H, dilation_W = tuple(str(int(x)) for x in dilation)
-
-#     src = """
-#         #define CUTLASS_ENABLE_CUBLAS 1
-#         #define CUTLASS_NAMESPACE cutlass
-#         #define CUTLASS_ENABLE_TENSOR_CORE_MMA 1
-#         #define NDEBUG
-
-#         #include <cutlass/cutlass.h>
-#         #include <cutlass/gemm/device/gemm.h>
-#         #include <cutlass/conv/kernel/default_conv2d_fprop.h>
-#         #include <cutlass/conv/device/implicit_gemm_convolution.h>
-#         #include <cutlass/layout/matrix.h>
-#         #include <cutlass/numeric_types.h>
-#         #include <cutlass/util/device_memory.h>
-
-#         #include <fstream>
-#         #include <iostream>
-#         #include <sstream>
-#         #include <vector>
-
-#         #define DMLC_USE_LOGGING_LIBRARY <tvm/runtime/logging.h>
-
-#         #include <tvm/runtime/logging.h>
-#         #include <tvm/runtime/ndarray.h>
-#         #include <tvm/runtime/packed_func.h>
-
-#         namespace {
-
-#         using namespace tvm;
-#         using namespace tvm::runtime;
-
-#         // simple specialized impl, can be replaced by
-#         // call into libraries.
-#         void _HConv2D(NDArray A, NDArray B, NDArray out) {
-#             // A: [N, H, W, C], B: [O, KH, KW, C], out: [N, OH, OW, O]
-#             CHECK_EQ(A->ndim, 4);
-#             CHECK_EQ(B->ndim, 4);
-#             CHECK_EQ(out->ndim, 4);
-#             CHECK_EQ(A->shape[0], out->shape[0]);
-#             CHECK_EQ(A->shape[3], B->shape[3]);
-#             int N = A->shape[0];
-#             int H = A->shape[1];
-#             int W = A->shape[2];
-#             int C = A->shape[3];
-#             int O = B->shape[0];
-#             int KH = B->shape[1];
-#             int KW = B->shape[2];
-#             CHECK_EQ(out->shape[3], O);
-#             CHECK_EQ(A.DataType(), DataType::Float(16));
-#             CHECK_EQ(B.DataType(), DataType::Float(16));
-#             CHECK_EQ(out.DataType(), DataType::Float(16));
-#             int OH = (H + 2 * {{pad_H}} - ({{dilation_H}} * (KH - 1) + 1)) / {{stride_H}} + 1;
-#             int OW = (W + 2 * {{pad_W}} - ({{dilation_W}} * (KW - 1) + 1)) / {{stride_W}} + 1;
-#             CHECK_EQ(out->shape[1], OH);
-#             CHECK_EQ(out->shape[2], OW);
-
-#             using Conv2dFpropKernel =
-#                 typename cutlass::conv::kernel::DefaultConv2dFprop<
-#                     cutlass::half_t,
-#                     cutlass::layout::TensorNHWC,
-#                     cutlass::half_t,
-#                     cutlass::layout::TensorNHWC,
-#                     cutlass::half_t,
-#                     cutlass::layout::TensorNHWC,
-#                     cutlass::half_t,
-#                     cutlass::arch::OpClassTensorOp,
-#                     cutlass::arch::Sm75,
-#                     cutlass::gemm::GemmShape<128, 64, 32>,
-#                     cutlass::gemm::GemmShape<64, 32, 32>,
-#                     cutlass::gemm::GemmShape<16, 8, 8>,
-                    
-#                     cutlass::epilogue::thread::LinearCombination<
-#                         cutlass::half_t,
-#                         1,
-#                         cutlass::half_t,
-#                         cutlass::half_t
-#                     >,
-#                     cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<4>, // cutlass::gemm::threadblock::GemmSplitKIdentityThreadblockSwizzle<>,
-#                     2,
-#                     cutlass::arch::OpMultiplyAdd,
-#                     cutlass::conv::IteratorAlgorithm::kOptimized,
-#                     cutlass::conv::StrideSupport::kStrided,
-#                     1,
-#                     1
-#             >::Kernel;
-
-#             // Define the Conv operation (Implicit GEMM)
-#             using ImplicitGemm = cutlass::conv::device::ImplicitGemmConvolution<Conv2dFpropKernel>;
-
-#             // Construct Conv2dProblemSize with user defined output size
-#             cutlass::conv::Conv2dProblemSize problem_size(      
-#                 {N, H, W, C},
-#                 {O, KH, KW, C},
-#                 {{{pad_H}}, 0, {{pad_W}}, 0},
-#                 {{{stride_H}}, {{stride_W}}},
-#                 {{{dilation_H}}, {{dilation_W}}},
-#                 {N, OH, OW, O},
-#                 cutlass::conv::Mode::kCrossCorrelation, // mode
-#                 1                                       // split_k_slices
-#             );
-
-#             cutlass::half_t alpha(1.0);
-#             cutlass::half_t beta(0.0);
-#             cutlass::half_t* a = reinterpret_cast<cutlass::half_t*>(A->data);
-#             cutlass::half_t* b = reinterpret_cast<cutlass::half_t*>(B->data);
-#             cutlass::half_t* out_ptr = reinterpret_cast<cutlass::half_t*>(out->data);
-#             using Index = cutlass::layout::TensorNHWC::Stride::Index;
-#             cutlass::layout::TensorNHWC::Stride lda({Index(C), Index(W*C), Index(H*W*C)});
-#             cutlass::layout::TensorNHWC::Stride ldb({Index(C), Index(KW*C), Index(KH*KW*C)});
-#             cutlass::layout::TensorNHWC::Stride ldc({Index(O), Index(OW*O), Index(OH*OW*O)});
-#             typename ImplicitGemm::Arguments arguments{
-#                 problem_size,
-#                 {a, lda},
-#                 {b, ldb},
-#                 {out_ptr, ldc},
-#                 {out_ptr, ldc},
-#                 {alpha, beta},
-#             };
-
-#             ImplicitGemm implicit_gemm_op;
-#             cutlass::Status status = implicit_gemm_op(arguments);
-#             CHECK(status == cutlass::Status::kSuccess);
-#         }
-
-#         }  // namespace
-#         TVM_DLL_EXPORT_TYPED_FUNC({global_symbol}, _HConv2D);
-#     """
-#     res = (
-#         src.replace("{{pad_H}}", str(pad_H))
-#         .replace("{{pad_W}}", str(pad_W))
-#         .replace("{{stride_H}}", str(stride_H))
-#         .replace("{{stride_W}}", str(stride_W))
-#         .replace("{{dilation_H}}", str(dilation_H))
-#         .replace("{{dilation_W}}", str(dilation_W))
-#     )
-#     return res
-
-
-# GRAPH_PATTERN_CODE_LIST["padding_2d_NHWC/conv2d_NHWC"] = conv2d_NHWC_codegen
-
-# GRAPH_PATTERN_CODE_LIST["copy_4d/conv2d_NHWC"] = conv2d_NHWC_codegen
-

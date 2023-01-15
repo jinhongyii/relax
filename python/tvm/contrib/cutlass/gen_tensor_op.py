@@ -322,6 +322,8 @@ EPILOGUE_MAP = {
     "cutlass.dense_bias_gelu_fp16": (EpilogueFunctor.LinearCombinationGelu, False),
     "cutlass.dense_bias_gelu_fp32": (EpilogueFunctor.LinearCombinationGelu, False),
     "cutlass.batch_matmul": (EpilogueFunctor.LinearCombination, False),
+    "cutlass.batch_matmul_bias": (EpilogueFunctor.LinearCombinationBias, True),
+    "cutlass.batch_matmul_bias_relu": (EpilogueFunctor.LinearCombinationRelu, True),
     "cutlass.conv2d_bias_hardswish": (EpilogueFunctor.LinearCombinationHardSwish, False),
     "cutlass.conv2d_bias_silu": (EpilogueFunctor.LinearCombinationSilu, False),
     "cutlass.conv2d_bias_sigmoid": (EpilogueFunctor.LinearCombinationSigmoid, False),

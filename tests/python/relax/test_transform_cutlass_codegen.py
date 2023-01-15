@@ -53,6 +53,7 @@ def build(mod, file_name=PKG_FILE):
     mod = relax.transform.FuseOps()(mod)
     mod = relax.transform.FuseTIR()(mod)
     mod = relax.transform.SplitCallTIRByPattern()(mod)
+    print(mod.script())
     executbale = relax_build(mod, target)
     executbale.mod.export_library(file_name, cc="nvcc")
     return executbale
@@ -63,10 +64,12 @@ def constructGEMM(M, N, K):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", tvm.relax.TensorStructInfo((M, K), A_TYPE)
-                          )  # pylint: disable=invalid-name
-                B = R.arg("B", tvm.relax.TensorStructInfo((K, N), B_TYPE)
-                          )  # pylint: disable=invalid-name
+                A = R.arg(
+                    "A", relax.TensorStructInfo((M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
                 with R.dataflow() as df:
                     C = R.emit(R.matmul(A, B, out_dtype=C_TYPE))
                     R.output(C)
@@ -94,14 +97,17 @@ def constructGEMM_bias(M, N, K):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", R.tensor((M, K), A_TYPE)
-                          )  # pylint: disable=invalid-name
-                B = R.arg("B", R.tensor((K, N), B_TYPE)
-                          )  # pylint: disable=invalid-name
-                bias = R.arg("bias", R.tensor((1, N), A_TYPE)
-                             )  # pylint: disable=invalid-name
+                A = R.arg(
+                    "A", relax.TensorStructInfo((M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
+                bias = R.arg(
+                    "bias", relax.TensorStructInfo((1, N), A_TYPE)
+                )  # pylint: disable=invalid-name
                 with R.dataflow() as df:
-                    C = R.emit(R.nn.matmul(A, B, out_dtype=C_TYPE))
+                    C = R.emit(R.matmul(A, B, out_dtype=C_TYPE))
                     D = R.emit(R.add(C, bias))
                     R.output(D)
                 (D,) = df.output_vars
@@ -130,14 +136,17 @@ def constructGEMM_bias_relu(M, N, K):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", R.tensor((M, K), A_TYPE)
-                          )  # pylint: disable=invalid-name
-                B = R.arg("B", R.tensor((K, N), B_TYPE)
-                          )  # pylint: disable=invalid-name
-                bias = R.arg("bias", R.tensor((1, N), A_TYPE)
-                             )  # pylint: disable=invalid-name
+                A = R.arg(
+                    "A", relax.TensorStructInfo((M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
+                bias = R.arg(
+                    "bias", relax.TensorStructInfo((1, N), A_TYPE)
+                )  # pylint: disable=invalid-name
                 with R.dataflow() as df:
-                    C = R.emit(R.nn.matmul(A, B, out_dtype=C_TYPE))
+                    C = R.emit(R.matmul(A, B, out_dtype=C_TYPE))
                     D = R.emit(R.add(C, bias))
                     E = R.emit(R.nn.relu(D))
                     R.output(E)
@@ -159,8 +168,7 @@ def test_cutlass_dense_bias_relu():
     bias_tvm = tvm.nd.array(bias, dev)
     executable = tvm.runtime.load_module(PKG_FILE)
     result = f_run(executable, dev, A_tvm, B_tvm, bias_tvm)
-    np.testing.assert_allclose(
-        result.numpy(), np.maximum(A @ B + bias, 0), rtol=1e-2)
+    np.testing.assert_allclose(result.numpy(), np.maximum(A @ B + bias, 0), rtol=1e-2)
 
 
 def constructBatchGEMM(batch, M, N, K):
@@ -168,12 +176,14 @@ def constructBatchGEMM(batch, M, N, K):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", R.tensor((batch, M, K), A_TYPE)
-                          )  # pylint: disable=invalid-name
-                B = R.arg("B", R.tensor((K, N), B_TYPE)
-                          )  # pylint: disable=invalid-name
+                A = R.arg(
+                    "A", relax.TensorStructInfo((batch, M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
                 with R.dataflow() as df:
-                    C = R.emit(R.nn.matmul(A, B, out_dtype=C_TYPE))
+                    C = R.emit(R.matmul(A, B, out_dtype=C_TYPE))
                     R.output(C)
                 (C,) = df.output_vars
                 R.func_ret_value(C)
@@ -199,12 +209,14 @@ def constructBatchGEMM2(batch, M, N, K):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", R.tensor((batch, M, K), A_TYPE)
-                          )  # pylint: disable=invalid-name
-                B = R.arg("B", R.tensor((batch, K, N), B_TYPE)
-                          )  # pylint: disable=invalid-name
+                A = R.arg(
+                    "A", relax.TensorStructInfo((batch, M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((batch, K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
                 with R.dataflow() as df:
-                    C = R.emit(R.nn.matmul(A, B, out_dtype=C_TYPE))
+                    C = R.emit(R.matmul(A, B, out_dtype=C_TYPE))
                     R.output(C)
                 (C,) = df.output_vars
                 R.func_ret_value(C)
@@ -230,14 +242,17 @@ def constructBatchGEMM_bias(batch, M, N, K):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", R.tensor((batch, M, K), A_TYPE)
-                          )  # pylint: disable=invalid-name
-                B = R.arg("B", R.tensor((K, N), B_TYPE)
-                          )  # pylint: disable=invalid-name
-                bias = R.arg("bias", R.tensor((1, N), A_TYPE)
-                             )  # pylint: disable=invalid-name
+                A = R.arg(
+                    "A", relax.TensorStructInfo((batch, M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
+                bias = R.arg(
+                    "bias", relax.TensorStructInfo((1, N), A_TYPE)
+                )  # pylint: disable=invalid-name
                 with R.dataflow() as df:
-                    C = R.emit(R.nn.matmul(A, B, out_dtype=C_TYPE))
+                    C = R.emit(R.matmul(A, B, out_dtype=C_TYPE))
                     D = R.emit(R.add(C, bias))
                     R.output(D)
                 (D,) = df.output_vars
@@ -266,14 +281,17 @@ def constructBatchGEMM2_bias(batch, M, N, K):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                A = R.arg("A", R.tensor((batch, M, K), A_TYPE)
-                          )  # pylint: disable=invalid-name
-                B = R.arg("B", R.tensor((batch, K, N), B_TYPE)
-                          )  # pylint: disable=invalid-name
-                bias = R.arg("bias", R.tensor((1, N), A_TYPE)
-                             )  # pylint: disable=invalid-name
+                A = R.arg(
+                    "A", relax.TensorStructInfo((batch, M, K), A_TYPE)
+                )  # pylint: disable=invalid-name
+                B = R.arg(
+                    "B", relax.TensorStructInfo((batch, K, N), B_TYPE)
+                )  # pylint: disable=invalid-name
+                bias = R.arg(
+                    "bias", relax.TensorStructInfo((1, N), A_TYPE)
+                )  # pylint: disable=invalid-name
                 with R.dataflow() as df:
-                    C = R.emit(R.nn.matmul(A, B, out_dtype=C_TYPE))
+                    C = R.emit(R.matmul(A, B, out_dtype=C_TYPE))
                     D = R.emit(R.add(C, bias))
                     R.output(D)
                 (D,) = df.output_vars
@@ -307,10 +325,12 @@ def constructConv2D(N, C, H, W, KH, KW, O, strides, padding, dilation):
         with I.ir_module() as frame:
             with R.function():
                 R.func_name("main")
-                x = R.arg("x", R.tensor((N, H, W, C), A_TYPE)
-                          )  # pylint: disable=invalid-name
-                w = R.arg("w", R.tensor((O, KH, KW, C), B_TYPE)
-                          )  # pylint: disable=invalid-name
+                x = R.arg(
+                    "x", relax.TensorStructInfo((N, H, W, C), A_TYPE)
+                )  # pylint: disable=invalid-name
+                w = R.arg(
+                    "w", relax.TensorStructInfo((O, KH, KW, C), B_TYPE)
+                )  # pylint: disable=invalid-name
                 C = R.nn.conv2d(
                     x,
                     w,
@@ -340,10 +360,8 @@ def test_cutlass_conv2d():
     for strides in [(1, 1), (2, 2)]:
         for padding in [(0, 0), (3, 3)]:
             for dilation in [(1, 1), (4, 4)]:
-                filename = "/tmp/" + "test_transform_cutlass_codegen" + \
-                    str(counter) + ".so"
-                build(constructConv2D(n, c, h, w, kh, kw, o,
-                      strides, padding, dilation), filename)
+                filename = "/tmp/" + "test_transform_cutlass_codegen" + str(counter) + ".so"
+                build(constructConv2D(n, c, h, w, kh, kw, o, strides, padding, dilation), filename)
                 dev = tvm.cuda()
                 np.random.seed(0)
                 A = np.random.rand(n, h, w, c).astype("float16") * 5
@@ -352,24 +370,23 @@ def test_cutlass_conv2d():
                 B_tvm = tvm.nd.array(B, dev)
                 executable = tvm.runtime.load_module(filename)
                 result = f_run(executable, dev, A_tvm, B_tvm)
-                A_torch = torch.from_numpy(
-                    np.transpose(A, (0, 3, 1, 2))).cuda()
-                B_torch = torch.from_numpy(
-                    np.transpose(B, (0, 3, 1, 2))).cuda()
+                A_torch = torch.from_numpy(np.transpose(A, (0, 3, 1, 2))).cuda()
+                B_torch = torch.from_numpy(np.transpose(B, (0, 3, 1, 2))).cuda()
                 C_torch = torch.nn.functional.conv2d(
                     A_torch, B_torch, stride=strides, padding=padding, dilation=dilation
                 )
-                np.testing.assert_allclose(np.transpose(
-                    result.numpy(), (0, 3, 1, 2)), C_torch.cpu().numpy(), rtol=1e-2)
+                np.testing.assert_allclose(
+                    np.transpose(result.numpy(), (0, 3, 1, 2)), C_torch.cpu().numpy(), rtol=1e-2
+                )
                 counter += 1
 
 
 if __name__ == "__main__":
     test_cutlass_dense()
-    # test_cutlass_dense_bias()
-    # test_cutlass_dense_bias_relu()
-    # test_cutlass_batch_dense()
-    # test_cutlass_batch_dense2()
-    # test_cutlass_batch_dense_bias()
-    # test_cutlass_batch_dense2_bias()
+    test_cutlass_dense_bias()
+    test_cutlass_dense_bias_relu()
+    test_cutlass_batch_dense()
+    test_cutlass_batch_dense2()
+    test_cutlass_batch_dense_bias()
+    test_cutlass_batch_dense2_bias()
     # test_cutlass_conv2d()
