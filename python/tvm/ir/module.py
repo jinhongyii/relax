@@ -45,7 +45,7 @@ class IRModule(Node, Scriptable):
         Map of global var to BaseFunc
     """
 
-    def __init__(self, functions=None, type_definitions=None, attrs=None):
+    def __init__(self, functions=None, type_definitions=None, attrs=None, global_infos=None):
         if functions is None:
             functions = {}
         elif isinstance(functions, dict):
@@ -73,11 +73,14 @@ class IRModule(Node, Scriptable):
         if attrs is not None:
             attrs = ast.literal_eval(str(attrs))
             attrs = tvm.ir.make_node("DictAttrs", **attrs)
+        if global_infos is None:
+            global_infos = {}
         self.__init_handle_by_constructor__(
             _ffi_api.IRModule,
             functions,
             type_definitions,
             attrs,
+            global_infos,
         )
 
     def __setitem__(self, var, val):

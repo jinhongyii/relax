@@ -34,7 +34,8 @@ namespace tvm {
 
 IRModule::IRModule(tvm::Map<GlobalVar, BaseFunc> functions,
                    tvm::Map<GlobalTypeVar, TypeData> type_definitions,
-                   std::unordered_set<String> import_set, SourceMap source_map, DictAttrs attrs) {
+                   std::unordered_set<String> import_set, SourceMap source_map, DictAttrs attrs,
+                   Map<String, Array<GlobalInfo>> global_infos) {
   auto n = make_object<IRModuleNode>();
   n->functions = std::move(functions);
   n->type_definitions = std::move(type_definitions);
@@ -44,6 +45,7 @@ IRModule::IRModule(tvm::Map<GlobalVar, BaseFunc> functions,
   n->import_set_ = std::move(import_set);
   n->source_map = source_map;
   n->attrs = std::move(attrs);
+  n->global_infos = std::move(global_infos);
 
   for (const auto& kv : n->functions) {
     // set global var map
@@ -363,7 +365,7 @@ TVM_REGISTER_NODE_TYPE(IRModuleNode);
 
 TVM_REGISTER_GLOBAL("ir.IRModule")
     .set_body_typed([](tvm::Map<GlobalVar, BaseFunc> funcs, tvm::Map<GlobalTypeVar, TypeData> types,
-                       tvm::DictAttrs attrs) { return IRModule(funcs, types, {}, {}, attrs); });
+                       tvm::DictAttrs attrs, Map<String, Array<GlobalInfo>> global_infos) { return IRModule(funcs, types, {}, {}, attrs, global_infos); });
 
 TVM_REGISTER_GLOBAL("ir.Module_Add")
     .set_body_typed([](IRModule mod, GlobalVar var, ObjectRef val, bool update) -> IRModule {
