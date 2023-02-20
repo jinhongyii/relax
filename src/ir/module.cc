@@ -65,8 +65,15 @@ IRModule::IRModule(tvm::Map<GlobalVar, BaseFunc> functions,
 }
 
 bool IRModuleNode::SEqualReduce(const IRModuleNode* other, SEqualReducer equal) const {
+  LOG(INFO) << "attrs begin";
+  LOG(INFO) << this->attrs << " " <<other->attrs;
   if (!equal(this->attrs, other->attrs)) return false;
-
+  LOG(INFO) << "attrs end";
+  if (this->global_infos.size() != other->global_infos.size()) return false;
+  for(const auto& kv: this->global_infos) {
+    if (!equal(kv.second, other->global_infos[kv.first])) return false;
+  }
+  LOG(INFO) << "global infos end";
   if (functions.size() != other->functions.size()) return false;
   // Update GlobalVar remap
   for (const auto& gv : this->GetGlobalVars()) {
@@ -118,6 +125,7 @@ void IRModuleNode::SHashReduce(SHashReducer hash_reduce) const {
   }
   reduce_temp();
   hash_reduce(this->attrs);
+  hash_reduce(this->global_infos);
 }
 
 bool IRModuleNode::ContainGlobalVar(const String& name) const {

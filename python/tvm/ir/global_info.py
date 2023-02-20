@@ -14,20 +14,21 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Initial impl of relax parser for sugars"""
-from ...ir_builder.relax import *  # pylint: disable=redefined-builtin
-from ...ir_builder.relax import ir as _relax
-from . import parser as _parser
-from .entry import Callable, Object, Prim, Shape, Tensor, Tuple, function, match_cast
+"""Global Info."""
+import tvm
+from tvm.runtime.object import Object
 
-__all__ = _relax.__all__ + [
-    "Callable",
-    "Object",
-    "Prim",
-    "Shape",
-    "Tensor",
-    "DTensor",
-    "Tuple",
-    "function",
-    "match_cast",
-]
+class GlobalInfo(Object):
+    """Base node for all global info that can appear in the IR"""
+    pass
+
+    def __eq__(self, other):
+        """Compare two struct info for structural equivalence."""
+        return tvm.ir.structural_equal(self, other)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def same_as(self, other):
+        """Overload with structural equality."""
+        return super().__eq__(other)

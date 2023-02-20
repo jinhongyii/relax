@@ -23,6 +23,7 @@ import tvm
 
 from tvm.ir import Span, Node, EnvFunc, Array, Type
 from tvm.tir import PrimExpr
+from tvm.relax.distributed import DeviceMesh, Placement
 from .expr import StructInfo, Var, Expr, ShapeExpr
 
 from . import _ffi_api, ty, expr
@@ -120,6 +121,35 @@ class TensorStructInfo(StructInfo):
             _ffi_api.TensorStructInfo, shape, dtype, ndim, span  # type: ignore
         )
 
+
+@tvm._ffi.register_object("relax.DTensorStructInfo")
+class DTensorStructInfo(StructInfo):
+    """StructInfo of a Distributed Tensor value.
+
+    Parameters
+    ----------
+    device_mesh: DeviceMesh
+        The device mesh of the tensor.
+    placement: Placement
+        The placement of the tensor among the device mesh
+    tensor_sinfo: TensorStructInfo
+        The struct info inherited from TensorStructInfo
+    """
+
+    device_mesh: DeviceMesh
+    placement: Placement
+    tensor_sinfo: TensorStructInfo
+
+    def __init__(
+        self,
+        device_mesh: DeviceMesh,
+        placement: Placement,
+        tensor_sinfo: TensorStructInfo,
+        span: Span = None,
+    ) -> None:
+        self.__init_handle_by_constructor__(
+            _ffi_api.DTensorStructInfo, device_mesh, placement, tensor_sinfo, span  # type: ignore
+        )
 
 @tvm._ffi.register_object("relax.TupleStructInfo")
 class TupleStructInfo(StructInfo):

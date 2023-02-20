@@ -25,7 +25,7 @@
 #include <tvm/relax/block_builder.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/type.h>
-
+#include <tvm/relax/distributed_tensor.h>
 namespace tvm {
 namespace relax {
 
@@ -215,7 +215,67 @@ class TensorStructInfo : public StructInfo {
    */
   TVM_DLL TensorStructInfo(DataType dtype, int ndim, Span span = Span());
 
-  TVM_DEFINE_NOTNULLABLE_OBJECT_REF_METHODS(TensorStructInfo, StructInfo, TensorStructInfoNode);
+  TVM_DEFINE_OBJECT_REF_METHODS(TensorStructInfo, StructInfo, TensorStructInfoNode);
+};
+
+/*!
+ * \brief StructInfo of DTensor (Distributed Tensor).
+ */
+class DTensorStructInfoNode : public StructInfoNode {
+ public:
+  /*!
+   * \brief The device mesh of the tensor.
+  */
+  DeviceMesh device_mesh;
+  /*!
+   * \brief The placement of the tensor among the device mesh.
+  */
+  Placement placement;
+    /*!
+   * \brief The struct info inherited from TensorStructInfo
+   */
+  TensorStructInfo tensor_sinfo;
+
+  void VisitAttrs(AttrVisitor* v) {
+    v->Visit("device_mesh", &device_mesh);
+    v->Visit("placement", &placement);
+    v->Visit("tensor_sinfo", &tensor_sinfo);
+    v->Visit("span", &span);
+  }
+
+  bool SEqualReduce(const DTensorStructInfoNode* other, SEqualReducer equal) const {
+    return equal(tensor_sinfo, other->tensor_sinfo) && equal(device_mesh, other->device_mesh) &&
+           equal(placement, other->placement);
+  }
+
+  void SHashReduce(SHashReducer hash_reduce) const {
+    hash_reduce(tensor_sinfo);
+    hash_reduce(device_mesh);
+    hash_reduce(placement);
+  }
+
+  static constexpr const char* _type_key = "relax.DTensorStructInfo";
+  TVM_DECLARE_FINAL_OBJECT_INFO(DTensorStructInfoNode, StructInfoNode);
+};
+
+/*!
+ * \brief Managed reference to DTensorStructInfoNode.
+ * \sa DTensorStructInfoNode
+ */
+class DTensorStructInfo : public StructInfo {
+ public:
+
+  /*!
+   * \brief Construction with device mesh and placement.
+   * \param device_mesh The device mesh of the tensor.
+   * \param placement The placement of the tensor among the device mesh.
+   * \param tensor_sinfo The struct info inherited from TensorStructInfo
+   * \param span The span of the AST.
+   */
+  TVM_DLL DTensorStructInfo(DeviceMesh device_mesh,
+                            Placement placement, TensorStructInfo tensor_sinfo, Span span = Span());
+
+  TVM_DEFINE_NOTNULLABLE_OBJECT_REF_METHODS(DTensorStructInfo, StructInfo, DTensorStructInfoNode);
 };
 
 /*!

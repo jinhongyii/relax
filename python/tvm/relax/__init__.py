@@ -69,6 +69,7 @@ from .struct_info import (
     PrimStructInfo,
     ShapeStructInfo,
     TensorStructInfo,
+    DTensorStructInfo,
     TupleStructInfo,
     FuncStructInfo,
 )

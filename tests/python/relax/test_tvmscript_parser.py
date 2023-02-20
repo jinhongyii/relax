@@ -35,7 +35,9 @@ def _check(
     roundtrip_mod = tvm.script.from_source(test)
     tvm.ir.assert_structural_equal(parsed, roundtrip_mod)
     if expect:
+        print("start")
         tvm.ir.assert_structural_equal(parsed, expect)
+        print("end")
 
 
 def test_simple_func():
@@ -157,6 +159,12 @@ def test_unassigned_call_fail():
 def test_simple_module():
     @I.ir_module
     class TestModule:
+        I.module_attrs({
+                "device_num": 10
+        })
+        I.module_global_infos({
+            "device_mesh": [R.DeviceMesh((2, 2), 0, 4, 1), R.DeviceMesh((1, ), 4, 5, 1)]
+        })
         @T.prim_func
         def tir_func(
             x: T.Buffer((T.int64(128), T.int64(128)), "float32"),
@@ -179,7 +187,7 @@ def test_simple_module():
     with bb.function("foo", (x,)):
         out = bb.emit_te(lambda x: x + 1, x, primfunc_name_hint="tir_func")
         bb.emit_func_output(out)
-
+    print("start check")
     _check(TestModule, bb.get())
 
 
@@ -1121,4 +1129,4 @@ def test_class_normalize():
 
 
 if __name__ == "__main__":
-    tvm.testing.main()
+    test_simple_module()

@@ -26,6 +26,8 @@ import tvm
 from tvm import DataType, relax
 from tvm.ir import PrimExpr
 from tvm.relax import Call, Expr, ExternFunc, TupleGetItem, Var, const
+from tvm.relax.distributed import DeviceMesh, Placement
+from tvm.runtime import ShapeTuple
 
 ############################### Operators ###############################
 from tvm.relax.op import (
@@ -460,6 +462,26 @@ def dtype(value: Union[py_str, DataType]) -> Expr:
     return relax.DataTypeImm(value)  # type: ignore[attr-defined] # pylint: disable=no-member
 
 
+############################### Distributed ###############################
+
+def device_mesh(shape: ShapeTuple, device_start: int, device_end: int, device_step: int) -> DeviceMesh:
+    """Create a device mesh expression.
+    Parameters
+    ----------
+    shape : ShapeTuple
+        The shape of the device mesh.
+    device_start: int
+    device_end: int
+    device_step: int
+        range(device_start, device_end, device_step) represents the device id in the mesh
+        
+    Returns
+    -------
+    res : DeviceMesh
+        The device mesh.
+    """
+    return DeviceMesh(shape, device_start, device_end, device_step)  # pylint: disable=no-member # type: ignore
+
 ############################### Importer ###############################
 
 __all__ = [
@@ -490,6 +512,7 @@ __all__ = [
     "cosh",
     "const",
     "dataflow",
+    "device_mesh",
     "divide",
     "dtype",
     "emit",
