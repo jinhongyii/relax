@@ -50,6 +50,11 @@ class StaticTypeDeriver : public StructInfoFunctor<Type(const StructInfo&)> {
     return DynTensorType(op->ndim, op->dtype);
   }
 
+  Type VisitStructInfo_(const DTensorStructInfoNode* op) final {
+    return DistributedDynTensorType(op->device_mesh, op->placement, op->tensor_sinfo->ndim,
+                                    op->tensor_sinfo->dtype);
+  }
+
   Type VisitStructInfo_(const TupleStructInfoNode* op) final {
     Array<Type> fields =
         op->fields.Map([this](const StructInfo& sinfo) { return this->VisitStructInfo(sinfo); });
@@ -343,6 +348,23 @@ class StructInfoBaseChecker
     // shape match check
     return ShapeMatchCheck(lhs->shape.value(), rhs->shape.value());
   }
+
+    BaseCheckResult VisitStructInfo_(const DTensorStructInfoNode* lhs, const StructInfo& other) final {
+      auto* rhs = other.as<DTensorStructInfoNode>();
+      if (rhs == nullptr) {
+        if (other.as<ObjectStructInfoNode>()) return BaseCheckResult::kFailL1;
+        return BaseCheckResult::kFailL0;
+      }
+      BaseCheckResult tensor_sinfo_check_result = this->VisitStructInfo(lhs->tensor_sinfo, rhs->tensor_sinfo);
+      BaseCheckResult other_check_result;
+      if (!struct_equal_(lhs->device_mesh, rhs->device_mesh) || !struct_equal_(lhs->placement, rhs->placement)){
+        //todo(hongyi): FailL1 or FailL2 ?
+        other_check_result = BaseCheckResult::kFailL1;
+      } else {
+        other_check_result = BaseCheckResult::kPass;
+      }
+      return CombineCheck(tensor_sinfo_check_result, other_check_result);
+    }
 
   BaseCheckResult VisitStructInfo_(const TupleStructInfoNode* lhs, const StructInfo& other) final {
     auto* rhs = other.as<TupleStructInfoNode>();

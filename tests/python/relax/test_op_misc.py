@@ -41,6 +41,11 @@ def test_call_tir() -> None:
     v0 = rx.Var("v0", R.Tensor([54, 96], "float32"))
     v1 = rx.call_tir(rx.extern("test.op.identity"), [v0], R.Tensor((54, 96), "float32"))
     v1 = rx.call_tir(identity_tir, [v0], R.Tensor((54, 96), "float32"))
+    device_mesh = rx.distributed.DeviceMesh((2, 2), 0, 4, 1)
+    v2 = rx.Var("v1", R.DTensor(device_mesh, "S[1]R", (54, 96), "float32"))
+    v3 = rx.call_tir(rx.extern("test.op.identity"), [v2], R.DTensor(
+        device_mesh, "S[1]R", (54, 96), "float32"))
+
 
 
 def test_implicit_op():

@@ -72,6 +72,24 @@ TVM_REGISTER_GLOBAL("relax.DynTensorType").set_body_typed([](int ndim, DataType 
   return DynTensorType(ndim, dtype, span);
 });
 
+DistributedDynTensorType::DistributedDynTensorType(DeviceMesh device_mesh, Placement placement, int ndim, DataType dtype, Span span) {
+  ObjectPtr<DistributedDynTensorTypeNode> n = make_object<DistributedDynTensorTypeNode>();
+  n->device_mesh = std::move(device_mesh);
+  n->placement = std::move(placement);
+  n->ndim = std::move(ndim);
+  n->dtype = std::move(dtype);
+  n->span = span;
+  data_ = std::move(n);
+}
+
+
+
+TVM_REGISTER_NODE_TYPE(DistributedDynTensorTypeNode);
+
+TVM_REGISTER_GLOBAL("relax.DistributedDynTensorType").set_body_typed([](DeviceMesh device_mesh, Placement placement, int ndim, DataType dtype, Span span) {
+  return DistributedDynTensorType(device_mesh, placement, ndim, dtype, span);
+});
+
 PackedFuncType::PackedFuncType(Span span) {
   ObjectPtr<PackedFuncTypeNode> n = make_object<PackedFuncTypeNode>();
   n->span = span;

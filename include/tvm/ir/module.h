@@ -209,6 +209,13 @@ class IRModuleNode : public Object {
   TVM_DLL void UpdateTypeDef(const GlobalTypeVar& var, const TypeData& type);
 
   /*!
+   * \brief Update an array of global infos in the global environment.
+   * \param name The name of the global info.
+   * \param info The new array of global infos.
+   */
+  TVM_DLL void UpdateGlobalInfo(const String& name, const Array<GlobalInfo>& info);
+
+  /*!
    * \brief Remove a function from the global environment.
    * \param var The name of the global function to update.
    */

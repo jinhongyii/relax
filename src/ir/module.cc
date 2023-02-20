@@ -65,15 +65,11 @@ IRModule::IRModule(tvm::Map<GlobalVar, BaseFunc> functions,
 }
 
 bool IRModuleNode::SEqualReduce(const IRModuleNode* other, SEqualReducer equal) const {
-  LOG(INFO) << "attrs begin";
-  LOG(INFO) << this->attrs << " " <<other->attrs;
   if (!equal(this->attrs, other->attrs)) return false;
-  LOG(INFO) << "attrs end";
   if (this->global_infos.size() != other->global_infos.size()) return false;
-  for(const auto& kv: this->global_infos) {
+  for (const auto& kv : this->global_infos) {
     if (!equal(kv.second, other->global_infos[kv.first])) return false;
   }
-  LOG(INFO) << "global infos end";
   if (functions.size() != other->functions.size()) return false;
   // Update GlobalVar remap
   for (const auto& gv : this->GetGlobalVars()) {
@@ -247,6 +243,10 @@ void IRModuleNode::Update(const GlobalVar& var, const BaseFunc& func) {
 
 void IRModuleNode::UpdateTypeDef(const GlobalTypeVar& var, const TypeData& type) {
   this->AddTypeDef(var, type, true);
+}
+
+void IRModuleNode::UpdateGlobalInfo(const String& name, const Array<GlobalInfo>& info){
+  this->global_infos.Set(name, info);
 }
 
 void IRModuleNode::Remove(const GlobalVar& var) {
@@ -430,6 +430,9 @@ TVM_REGISTER_GLOBAL("ir.Module_Update").set_body_typed([](IRModule mod, IRModule
 
 TVM_REGISTER_GLOBAL("ir.Module_UpdateFunction")
     .set_body_typed([](IRModule mod, GlobalVar gv, BaseFunc func) { mod->Update(gv, func); });
+
+TVM_REGISTER_GLOBAL("ir.Module_UpdateGlobalInfo")
+    .set_body_typed([](IRModule mod, String name, Array<GlobalInfo> global_info) { mod->UpdateGlobalInfo(name, global_info); });
 
 TVM_REGISTER_GLOBAL("ir.Module_Import").set_body_typed([](IRModule mod, String path) {
   mod->Import(path);

@@ -31,6 +31,7 @@
 #include <tvm/ir/type_relation.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/tir/expr.h>
+#include <tvm/relax/distributed_tensor.h>
 
 #include <string>
 
@@ -141,6 +142,70 @@ class DynTensorType : public Type {
 
   TVM_DEFINE_OBJECT_REF_METHODS(DynTensorType, Type, DynTensorTypeNode);
 };
+
+class DistributedDynTensorTypeNode : public BaseTensorTypeNode {
+ public:
+  /*!
+   * \brief device mesh of the tensor.
+   */
+  DeviceMesh device_mesh;
+  /*!
+   * \brief The placement of the tensor among the device mesh.
+   */
+  Placement placement;
+  /*!
+   * \brief The number of dimensions of the tensor, use -1 to denote tensor with unknwon number of
+   * dimensions.
+   */
+  int ndim;
+  /*! \brief The content data type, use void to denote the dtype is unknown. */
+  DataType dtype;
+
+  void VisitAttrs(tvm::AttrVisitor* v) {
+    v->Visit("device_mesh", &device_mesh);
+    v->Visit("placement", &placement);
+    v->Visit("ndim", &ndim);
+    v->Visit("dtype", &dtype);
+    v->Visit("span", &span);
+  }
+
+  bool SEqualReduce(const DistributedDynTensorTypeNode* other, SEqualReducer equal) const {
+    return equal(device_mesh, other->device_mesh) && equal(placement, other->placement) && equal(ndim, other->ndim) && equal(dtype, other->dtype);
+  }
+
+  void SHashReduce(SHashReducer hash_reduce) const {
+    hash_reduce(device_mesh);
+    hash_reduce(placement);
+    hash_reduce(ndim);
+    hash_reduce(dtype);
+  }
+
+  inline bool IsUnknownNdim() const { return ndim == kUnknownNDim; }
+
+  inline bool IsUnknownDtype() const { return dtype.is_void(); }
+
+  static constexpr const char* _type_key = "relax.DistributedDynTensorType";
+  TVM_DECLARE_FINAL_OBJECT_INFO(DistributedDynTensorTypeNode, BaseTensorTypeNode);
+};
+
+/*!
+ * \brief Managed reference to DynTensorTypeNode.
+ * \sa DynTensorTypeNode.
+ */
+class DistributedDynTensorType : public Type {
+ public:
+  /*!
+   * \brief Constructor.
+   * \param device_mesh The device mesh of the tensor.
+   * \param placement The placement of the tensor among the device mesh.
+   * \param ndim The number of dimension of the tensor.
+   * \param dtype The runtime dtype of the tensor's elements.
+   */
+  TVM_DLL DistributedDynTensorType(DeviceMesh device_mesh, Placement placement, int ndim, DataType dtype, Span span = Span());
+
+  TVM_DEFINE_OBJECT_REF_METHODS(DistributedDynTensorType, Type, DistributedDynTensorTypeNode);
+};
+
 
 class PackedFuncTypeNode : public TypeNode {
  public:

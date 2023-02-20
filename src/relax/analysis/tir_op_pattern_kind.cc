@@ -442,6 +442,10 @@ bool HasReshapePattern(const PrimFunc& func) {
 }
 
 TVM_REGISTER_GLOBAL("relax.analysis.has_reshape_pattern").set_body_typed(HasReshapePattern);
+TVM_REGISTER_GLOBAL("relax.analysis.analyze_op_pattern_kind").set_body_typed([](PrimFunc func) {
+  auto kind = AnalyzeOpPatternKind(func);
+  return Integer(static_cast<int>(kind));
+});
 
 }  // namespace relax
 }  // namespace tvm

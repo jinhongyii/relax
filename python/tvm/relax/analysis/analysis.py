@@ -210,6 +210,23 @@ def has_reshape_pattern(func: tir.PrimFunc) -> bool:
     return _ffi_api.has_reshape_pattern(func)  # type: ignore
 
 
+def analyze_op_pattern_kind(func):
+    """
+    Find the Op pattern kind of a primfunc.
+
+    Parameters
+    ----------
+    func : Function
+        The input function to be analyzed.
+
+    Returns
+    -------
+    int
+        The op pattern kind.
+    
+    """
+    return _ffi_api.analyze_op_pattern_kind(func)
+
 def get_var2val(func: Function) -> Dict[Var, Expr]:
     """
     Get a mapping from Var to Expr for each variable in the function.

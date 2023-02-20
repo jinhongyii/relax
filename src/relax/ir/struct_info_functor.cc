@@ -44,6 +44,11 @@ void StructInfoVisitor::VisitStructInfo_(const TensorStructInfoNode* op) {
   }
 }
 
+void StructInfoVisitor::VisitStructInfo_(const DTensorStructInfoNode* op) {
+  //todo(hongyi): visit device mesh and placement?
+  this->VisitStructInfo(op->tensor_sinfo);
+}
+
 void StructInfoVisitor::VisitStructInfo_(const TupleStructInfoNode* op) {
   for (StructInfo field : op->fields) {
     this->VisitStructInfo(field);
@@ -95,6 +100,12 @@ StructInfo StructInfoMutator::VisitStructInfo_(const TensorStructInfoNode* op) {
   } else {
     return TensorStructInfo(shape.value(), op->dtype, op->span);
   }
+}
+
+StructInfo StructInfoMutator::VisitStructInfo_(const DTensorStructInfoNode* op) {
+  //todo(hongyi): mutate device mesh and placement?
+  TensorStructInfo tensor_sinfo = Downcast<TensorStructInfo>(this->VisitStructInfo(op->tensor_sinfo));
+  return DTensorStructInfo(op->device_mesh, op->placement, tensor_sinfo);
 }
 
 StructInfo StructInfoMutator::VisitStructInfo_(const TupleStructInfoNode* op) {

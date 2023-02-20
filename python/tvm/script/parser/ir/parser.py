@@ -35,11 +35,17 @@ def _visit_class_def(self: Parser, node: doc.ClassDef) -> None:
 
     with self.var_table.with_frame():
         with I.ir_module():
+            with self.with_dispatch_token("ir"):
+                for stmt in node.body:
+                    if not isinstance(stmt, doc.FunctionDef):
+                        self.visit(stmt)
             for stmt in node.body:
                 if isinstance(stmt, doc.FunctionDef):
                     self.visit_tvm_declare_function(stmt)
             with self.with_dispatch_token("ir"):
-                self.visit_body(node.body)
+                for stmt in node.body:
+                    if isinstance(stmt, doc.FunctionDef):
+                        self.visit(stmt)
 
 
 @dispatch.register(token="ir", type_name="Assign")

@@ -67,6 +67,32 @@ class DynTensorType(Type):
         )
 
 
+@tvm._ffi.register_object("relax.DistributedDynTensorType")
+class DistributedDynTensorType(Type):
+    """A distributed dynamic tensor type in Relax.
+
+    This is the type assigned to tensors with a known device_mesh, placement, type and unknown shape.
+
+    Parameters
+    ----------
+    device_mesh: DeviceMesh
+        The device mesh of the tensor.
+        
+    placement: Placement
+        The placement of the tensor.
+        
+    ndim : Optional[int]
+        The ndim of the Tensor
+
+    dtype : Optional[str]
+        The content data type.
+    """
+
+    def __init__(self, device_mesh, placement, ndim=-1, dtype="float32", span: Span = None) -> None:
+        self.__init_handle_by_constructor__(
+            _ffi_api.DistributedDynTensorType, device_mesh, placement, ndim, dtype, span  # type: ignore
+        )
+
 @tvm._ffi.register_object("relax.PackedFuncType")
 class PackedFuncType(Type):
     """The type of ExternFunc in Relax."""

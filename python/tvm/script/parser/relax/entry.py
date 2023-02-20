@@ -38,6 +38,8 @@ from tvm.runtime import ObjectGeneric
 from tvm.tir import PrimExpr
 
 from .._core import parse, utils
+from tvm.script.ir_builder import IRBuilder
+from tvm.script.ir_builder.ir import IRModuleFrame
 
 FType = TypeVar("FType", bound=_Callable)
 
@@ -169,12 +171,12 @@ class DTensorProxy(StructInfoProxy):
 
 
 def DTensor(
-    device_mesh: DeviceMesh,
-    placement: Placement,
+    device_mesh: Union[str, DeviceMesh],
+    placement: Union[str, Placement], 
     shape: Optional[List[Union[PrimExpr, str]]] = None,
     dtype: Optional[str] = None,
     ndim: int = -1,
-) -> TensorProxy:
+) -> DTensorProxy:
     # scalar tensor case
     if shape is not None and len(shape) == 0:
         shape = []
@@ -184,6 +186,19 @@ def DTensor(
 
     if shape is not None and not isinstance(shape, (tuple, list)):
         raise ValueError(f"shape must be a list or tuple, but got: {shape}")
+    if isinstance(device_mesh, str):
+        if not IRBuilder.is_in_scope():
+            return 
+        name, index = device_mesh.split("[")
+        index = int(index[:-1])
+        frames = IRBuilder.current().frames
+        for f in frames:
+            if isinstance(f, IRModuleFrame):
+                device_mesh = f.global_infos[name][index]
+                break
+        assert isinstance(device_mesh, DeviceMesh)
+    if isinstance(placement, str):
+        placement = Placement(placement)
     return DTensorProxy(device_mesh, placement, TensorProxy(shape, dtype, ndim))
 
 ############################## R.Callable ##############################

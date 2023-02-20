@@ -34,7 +34,7 @@ from .expr import (
     BaseFunc,
     Binding,
 )
-from .struct_info import PrimStructInfo, ShapeStructInfo, StructInfo, TensorStructInfo
+from .struct_info import ShapeStructInfo, StructInfo, TensorStructInfo,  DTensorStructInfo, PrimStructInfo
 from .op.base import call_tir
 from . import _ffi_api
 
@@ -251,6 +251,16 @@ class BlockBuilder(Object):
                     arg = te_tensor(arg, tir_var_map)
                     te_args_list.append(arg)
                     return arg
+                elif isinstance(arg.struct_info, DTensorStructInfo):
+                    assert isinstance(
+                        arg.struct_info.tensor_sinfo.shape, ShapeExpr
+                    ), "emit_te now only supports Tensor that has ShapeExpr shape"
+                    for shape_value in arg.struct_info.tensor_sinfo.shape.values:
+                        _copy_undefined_var(shape_value)
+
+                    arg = te_tensor(arg, tir_var_map)
+                    te_args_list.append(arg)
+                    return arg
                 elif isinstance(arg.struct_info, ShapeStructInfo):
                     assert isinstance(
                         arg, ShapeExpr
@@ -427,7 +437,7 @@ class BlockBuilder(Object):
         tir_func = tvm.te.create_relax_prim_func(inputs, unbound_tir_vars, "int64")
 
         tir_func = tir_func.without_attr("global_symbol")
-
+            
         if primfunc_name_hint:
             gvar = self.add_func(tir_func, primfunc_name_hint)
         else:
@@ -446,10 +456,26 @@ class BlockBuilder(Object):
         # with old set of variables.
         tir_var_inverse_map = {v: k for k, v in tir_var_map.items()}
 
-        output_sinfo = [
-            TensorStructInfo(_shape_with_old_tir_var(out.shape, tir_var_inverse_map), out.dtype)
-            for out in outs
-        ]
+        dtensor = None
+        for arg in args:
+            if isinstance(arg, Var):
+                if isinstance(arg.struct_info, rx.DTensorStructInfo):
+                    dtensor = arg.struct_info
+                    break
+        if dtensor:
+            pattern = rx.analysis.analyze_op_pattern_kind(tir_func)
+            if pattern==0:
+                assert len(outs) == 1
+                tensor_sinfo = TensorStructInfo(_shape_with_old_tir_var(
+                    outs[0].shape, tir_var_inverse_map), outs[0].dtype)
+                output_sinfo = [rx.DTensorStructInfo(dtensor.device_mesh, dtensor.placement, tensor_sinfo)]
+            else:
+                raise ValueError("propagation for non-elemwise ops have not yet been supported.")
+        else:
+            output_sinfo = [
+                TensorStructInfo(_shape_with_old_tir_var(out.shape, tir_var_inverse_map), out.dtype)
+                for out in outs
+            ]
 
         # add arguments for extra parameters from unbound var
         if len(unbound_tir_vars) > 0:

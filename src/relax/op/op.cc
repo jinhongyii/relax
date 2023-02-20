@@ -77,13 +77,23 @@ RELAY_REGISTER_OP("relax.call_tir")
                   "args if unused")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoCallTIR);
 
-Expr MakeCallTIR(Expr func, Tuple args, Array<TensorStructInfo> out_sinfo_list,
+Expr MakeCallTIR(Expr func, Tuple args, Array<StructInfo> out_sinfo_list,
                  Optional<Expr> packed_ints) {
-  for (const TensorStructInfo& sinfo : out_sinfo_list) {
-    const auto* shape = sinfo->shape.as<ShapeExprNode>();
-    CHECK(shape != nullptr) << "out_sinfo of call_tir should have defined ShapeExpr as shape. "
-                               "However, one given structure info is "
-                            << sinfo;
+  for (const StructInfo& sinfo : out_sinfo_list) {
+    if(const auto* tensor_sinfo = sinfo.as<TensorStructInfoNode>()){
+      const auto* shape = tensor_sinfo->shape.as<ShapeExprNode>();
+      CHECK(shape != nullptr) << "out_sinfo of call_tir should have defined ShapeExpr as shape. "
+                                "However, one given structure info is "
+                              << sinfo;
+    } else if(const auto* dtensor_sinfo = sinfo.as<DTensorStructInfoNode>()){
+      const auto* shape = dtensor_sinfo->tensor_sinfo->shape.as<ShapeExprNode>();
+      CHECK(shape != nullptr) << "out_sinfo of call_tir should have defined ShapeExpr as shape. "
+                                "However, one given structure info is "
+                              << sinfo;
+    } else {
+      LOG(FATAL) << "ValueError: call_tir doesn't accept out_sinfo of type other than "
+                    "TensorStructInfo or DTensorStructInfo";
+    }
   }
 
   StructInfo out_sinfo{nullptr};

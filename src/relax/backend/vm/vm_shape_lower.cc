@@ -623,6 +623,11 @@ class VMShapeLowerMutator
     }
   }
 
+  void VisitStructInfo_(const DTensorStructInfoNode* op, Expr value, bool always_check,
+                        const String& err_ctx, std::vector<MatchShapeTodoItem>* match_todos) final{
+    LOG(FATAL) << "dtensor not supported in vm shape lower";
+  }
+
   // Internal helper function to make tuple get item.
   // This function will try to simplify constant tuples
   // the return value **always** have struct info.
