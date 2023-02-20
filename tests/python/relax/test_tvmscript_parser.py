@@ -69,12 +69,8 @@ def test_error_report():
 def test_simple_module():
     @I.ir_module
     class TestModule:
-        I.module_attrs({
-                "device_num": 10
-        })
-        I.module_global_infos({
-            "device_mesh": [R.DeviceMesh((2, 2), 0, 4, 1), R.DeviceMesh((1, ), 4, 5, 1)]
-        })
+        I.module_attrs({"device_num": 10})
+
         @T.prim_func
         def tir_func(
             x: T.Buffer((T.int64(128), T.int64(128)), "float32"),

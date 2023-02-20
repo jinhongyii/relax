@@ -77,6 +77,11 @@ IRBuilder IRBuilder::Current() {
   return stack->back();
 }
 
+bool IRBuilder::IsInScope() {
+  std::vector<IRBuilder>* stack = ThreadLocalBuilderStack();
+  return !stack->empty();
+}
+
 namespace details {
 
 Namer::FType& Namer::vtable() {

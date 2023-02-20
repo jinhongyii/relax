@@ -55,7 +55,7 @@ def _visit_assign(_self: Parser, _node: doc.Assign) -> None:
 
 
 @dispatch.register(token="ir", type_name="Expr")
-def _visit_expr(_self: Parser, _node: doc.Expr) -> None:
+def _visit_expr(self: Parser, node: doc.Expr) -> None:
     """The expression visiting method for ir module.
 
     Parameters
@@ -66,6 +66,7 @@ def _visit_expr(_self: Parser, _node: doc.Expr) -> None:
     node : doc.ClassDef
         The doc AST expression node.
     """
+    self.eval_expr(node.value)
 
 
 @dispatch.register(token="default", type_name="Assign")

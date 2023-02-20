@@ -70,20 +70,25 @@ void DefFunction(const String& func_name, const BaseFunc& func) {
 }
 
 void ModuleAttrs(Map<String, ObjectRef> attrs) {
-  IRModuleFrame frame = FindModuleFrame("I.ModuleAttr");
-  if (!frame->attrs.empty()) {
-    LOG(FATAL) << "ValueError: Duplicate module attrs, previous one is:\n" << frame->attrs;
+  if (IRBuilder::IsInScope()) {
+    // TODO(hongyi): add comments to explain why we need to check if the module frame is in scope
+    IRModuleFrame frame = FindModuleFrame("I.ModuleAttr");
+    if (!frame->attrs.empty()) {
+      LOG(FATAL) << "ValueError: Duplicate module attrs, previous one is:\n" << frame->attrs;
+    }
+    frame->attrs = attrs;
   }
-  frame->attrs = attrs;
-  
 }
 
 void ModuleGlobalInfos(Map<String, Array<GlobalInfo>> global_infos) {
-  IRModuleFrame frame = FindModuleFrame("I.ModuleGlobalInfos");
-  if (!frame->global_infos.empty()) {
-    LOG(FATAL) << "ValueError: Duplicate module global_infos, previous one is:\n" << frame->global_infos;
+  if (IRBuilder::IsInScope()) {
+    IRModuleFrame frame = FindModuleFrame("I.ModuleGlobalInfos");
+    if (!frame->global_infos.empty()) {
+      LOG(FATAL) << "ValueError: Duplicate module global_infos, previous one is:\n"
+                 << frame->global_infos;
+    }
+    frame->global_infos = global_infos;
   }
-  frame->global_infos = global_infos;
 }
 
 TVM_REGISTER_GLOBAL("script.ir_builder.ir.IRModule").set_body_typed(IRModule);
