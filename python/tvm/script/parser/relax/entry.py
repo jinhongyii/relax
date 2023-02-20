@@ -29,8 +29,10 @@ from tvm.relax import (
     ShapeStructInfo,
     StructInfo,
     TensorStructInfo,
+    DTensorStructInfo,
     TupleStructInfo,
 )
+from tvm.relax.distributed import DeviceMesh, Placement
 from tvm.runtime import ObjectGeneric
 from tvm.tir import PrimExpr
 
@@ -128,6 +130,49 @@ def Tensor(
         raise ValueError(f"shape must be a list or tuple, but got: {shape}")
     return TensorProxy(shape, dtype, ndim)
 
+
+############################### R.DTensor ###############################
+
+class DTensorProxy(StructInfoProxy):
+    device_mesh: DeviceMesh
+    placement: Placement
+    tensor_sinfo_proxy: TensorProxy
+
+    def __init__(
+        self,
+        device_mesh: DeviceMesh,
+        placement: Placement,
+        tensor_sinfo_proxy: TensorProxy,
+    ) -> None:
+        self.device_mesh = device_mesh
+        self.placement = placement
+        self.tensor_sinfo_proxy = tensor_sinfo_proxy
+        super().__init__()
+
+    def get_symbolic_vars(self) -> Set[str]:
+        return self.tensor_sinfo_proxy.get_symbolic_vars()
+    
+    def as_struct_info(self, dict_globals: Optional[Dict[str, Any]] = None) -> TensorStructInfo:
+        return DTensorStructInfo(self.device_mesh, self.placement, self.tensor_sinfo_proxy.as_struct_info(dict_globals))
+
+
+def DTensor(
+    device_mesh: DeviceMesh,
+    placement: Placement,
+    shape: Optional[List[Union[PrimExpr, str]]] = None,
+    dtype: Optional[str] = None,
+    ndim: int = -1,
+) -> TensorProxy:
+    # scalar tensor case
+    if shape is not None and len(shape) == 0:
+        shape = []
+    if isinstance(shape, str) and dtype is None:
+        dtype = shape
+        shape = None
+
+    if shape is not None and not isinstance(shape, (tuple, list)):
+        raise ValueError(f"shape must be a list or tuple, but got: {shape}")
+    return DTensorProxy(device_mesh, placement, TensorProxy(shape, dtype, ndim))
 
 ############################## R.Callable ##############################
 

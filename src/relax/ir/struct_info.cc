@@ -129,6 +129,30 @@ TVM_REGISTER_GLOBAL("relax.TensorStructInfo")
       }
     });
 
+// DTensor
+DTensorStructInfo::DTensorStructInfo(DeviceMesh device_mesh,
+                            Placement placement, TensorStructInfo tensor_sinfo, Span span){
+  CHECK_EQ(device_mesh->shape.size(), placement->dim_placement.size())
+      << "ValueError: The device mesh and placement must have the same dimension size";
+  for(auto axis: placement->dim_placement){
+    CHECK_LT(axis->value, tensor_sinfo->ndim) << "ValueError: Sharding dimension should be smaller than tensor ndim";
+  }
+  ObjectPtr<DTensorStructInfoNode> n = make_object<DTensorStructInfoNode>();
+  n->device_mesh = std::move(device_mesh);
+  n->placement = std::move(placement);
+  n->tensor_sinfo = std::move(tensor_sinfo); 
+  n->span = span;
+  data_ = std::move(n);
+}
+
+TVM_REGISTER_NODE_TYPE(DTensorStructInfoNode);
+
+TVM_REGISTER_GLOBAL("relax.DTensorStructInfo")
+    .set_body_typed([](DeviceMesh device_mesh,
+                            Placement placement, TensorStructInfo tensor_sinfo, Span span) {
+      return DTensorStructInfo(device_mesh, placement, tensor_sinfo, span);
+    });
+
 // Tuple
 TupleStructInfo::TupleStructInfo(Array<StructInfo> fields, Span span) {
   ObjectPtr<TupleStructInfoNode> n = make_object<TupleStructInfoNode>();

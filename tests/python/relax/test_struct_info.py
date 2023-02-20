@@ -20,7 +20,7 @@ import tvm.testing
 import pytest
 
 from tvm import relax as rx, TVMError, tir
-
+from tvm.ir import structural_equal
 
 def _check_equal(x, y, map_free_vars=False):
     tvm.ir.assert_structural_equal(x, y, map_free_vars)
@@ -161,6 +161,50 @@ def test_tensor_struct_info():
         rx.TensorStructInfo([1, 2], ndim=2)
 
 
+def test_dtensor_struct_info():
+    n, m = tir.Var("n", "int64"), tir.Var("m", "int64")
+
+    tensor_s0 = rx.TensorStructInfo([1, n + 1, m], "float32")
+    tensor_s1 = rx.TensorStructInfo([1, n + 1, m], "float32")
+    assert tensor_s0 == tensor_s1
+    
+    device_mesh0 = rx.distributed.DeviceMesh((2, 2), 0, 4, 1)
+    device_mesh1 = rx.distributed.DeviceMesh((2, 2), 0, 4, 1)
+    tvm.ir.assert_structural_equal(device_mesh0, device_mesh1)
+    
+    placement0 = rx.distributed.Placement("S[0]R")
+    placement1 = rx.distributed.Placement("S[0]R")
+    tvm.ir.assert_structural_equal(placement0, placement1)
+    
+    s0 = rx.DTensorStructInfo(device_mesh0, placement0, tensor_s0)
+    s1 = rx.DTensorStructInfo(device_mesh1, placement1, tensor_s1)
+    _check_equal(s0, s1)
+
+    assert s0 == s1
+    tvm.ir.assert_structural_equal(s0.device_mesh, device_mesh0)
+    assert s0.device_mesh.shape == (2, 2)
+    assert s0.device_mesh.device_start == 0 
+    assert s0.device_mesh.device_end == 4
+    assert s0.device_mesh.device_step == 1
+    tvm.ir.assert_structural_equal(s0.placement, placement0)
+    assert len(s0.placement.dim_placement) == 2
+    assert s0.placement.dim_placement[0] == 0
+    assert s0.placement.dim_placement[1] == -1
+    assert s0.tensor_sinfo == tensor_s0
+
+    # can turn into str
+    # str(s0)
+
+    # dimension of device mesh and placement should be the same
+    placement2 = rx.distributed.Placement("S[0]RS[1]")
+    with pytest.raises(ValueError):
+        rx.DTensorStructInfo(device_mesh0, placement2, tensor_s0)
+        
+    # Sharding dimension should be smaller than tensor ndim
+    placement3 = rx.distributed.Placement("S[3]R")
+    with pytest.raises(ValueError):
+        rx.DTensorStructInfo(device_mesh0, placement3, tensor_s0)
+        
 def test_tuple_struct_info():
     n, m = tir.Var("n", "int64"), tir.Var("m", "int64")
 

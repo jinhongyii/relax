@@ -39,7 +39,7 @@ def ir_module(mod: Type) -> IRModule:
     """
     if not inspect.isclass(mod):
         raise TypeError(f"Expect a class, but got: {mod}")
-
+    print("parse irmodule")
     return parse(mod, utils.inspect_class_capture(mod))
 
 

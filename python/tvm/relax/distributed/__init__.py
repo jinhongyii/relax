@@ -14,20 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=missing-docstring
-from ...ir_builder.relax import *  # pylint: disable=redefined-builtin
-from ...ir_builder.relax import ir as _relax
-from . import parser as _parser
-from .entry import Callable, Object, Prim, Shape, Tensor, Tuple, function, match_cast
 
-__all__ = _relax.__all__ + [
-    "Callable",
-    "Object",
-    "Prim",
-    "Shape",
-    "Tensor",
-    "DTensor",
-    "Tuple",
-    "function",
-    "match_cast",
-]
+"""The infrastructure for distributed inference on Relax."""
+
+from .distributed_tensor import *
